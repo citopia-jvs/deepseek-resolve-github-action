@@ -25,6 +25,21 @@ const CONTROLES = /[\u0000-\u0008\u000B-\u001F\u007F-\u009F]/g;
 // envoyant autre chose au modèle.
 const INVISIBLES = /[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
 
+// Masquage STRUCTUREL, appliqué avant les motifs par forme : ici c'est la position
+// du secret qui le désigne, pas son apparence. Indispensable parce que les motifs
+// par forme dépendent d'une longueur — un jeton de moins de 34 caractères produit un
+// en-tête base64 de moins de 65 caractères, qui échappait au bloc base64 ci-dessous
+// et partait en clair dans un message d'erreur de git.
+const MOTIFS_SECRET_STRUCTURELS = [
+  // `git -c http.extraheader="AUTHORIZATION: basic <base64>"` du lot 3a.
+  [/((?:authorization)\s*:\s*(?:basic|bearer)\s+)\S+/gi, `$1${MARQUEUR_SECRET}`],
+  // La paire en clair, avant encodage.
+  [/(x-access-token\s*:\s*)[^\s@]+/gi, `$1${MARQUEUR_SECRET}`],
+  // Identifiants dans une URL de remote : git les recopie tels quels dans ses
+  // messages d'erreur, et c'est la forme que pose `persist-credentials: true`.
+  [/(https?:\/\/)[^/\s:@]+(?::[^/\s@]+)?@/g, `$1${MARQUEUR_SECRET}@`],
+];
+
 // Motifs de secrets, du plus spécifique au plus général. Le bloc base64 est
 // délibérément large : il attrape un jeton encodé, qu'aucun motif nommé ne voit.
 const MOTIFS_SECRET = [
@@ -61,6 +76,9 @@ function nettoyerTexteTiers(s) {
 function masquerSecrets(s) {
   if (typeof s !== 'string') return '';
   let sortie = s;
+  for (const [motif, remplacement] of MOTIFS_SECRET_STRUCTURELS) {
+    sortie = sortie.replace(motif, remplacement);
+  }
   for (const motif of MOTIFS_SECRET) {
     sortie = sortie.replace(motif, MARQUEUR_SECRET);
   }

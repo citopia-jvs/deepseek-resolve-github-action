@@ -29,6 +29,7 @@ Ces valeurs ne sont pas des points ouverts. Elles sont relevées et vérifiées.
 | `issue` | entier décimal | numéro d'issue, validé `Number.isInteger` |
 | `branche` | `fix-issue-<n>` | validée contre `/^fix-issue-\d+$/`. **Fait foi** : `resolve.js` ne la reconstruit pas |
 | `motif` | chaîne courte | motif du refus, pour le compte rendu. Vide si `poursuivre=true` |
+| `consigne-restreinte` | `'true'` \| `'false'` | écrite sur **tous** les chemins, refus compris — `'false'` par défaut, pour que le bloc de sorties soit de forme constante : un consommateur qui lit une sortie absente reçoit `''`, et `'' !== 'false'`. `'true'` = étage 2 bis du lot 2 a jugé l'auteur de l'issue non autorisé : le lot 3b ne prend que le commentaire comme consigne et fournit le corps de l'issue en données non fiables. Sans cette sortie, l'atténuation de R6 promise au lot 2 n'atteint jamais le lot 3b |
 
 ## Variables d'environnement lues par les scripts
 
@@ -62,6 +63,7 @@ probable de tout le plan.
 | `MAP_TOKENS` | input `map-tokens` |
 | `SANS_PUBLICATION` | input `no-publish` |
 | `MINUTES_MAX_APPEL_AIDER` | input `aider-call-timeout-minutes` |
+| `CONSIGNE_RESTREINTE` | sortie `consigne-restreinte` de la garde |
 | `GH_CLI`, `AIDER_CLI` | tests seulement — binaires injectables |
 
 ### `rendre-compte.js`
@@ -123,6 +125,37 @@ masquerSecrets(s)                                  // motifs de jetons -> [SECRE
 tronquer(s, n)                                     // tête + queue — jamais la tête seule, même si n
                                                    // est trop petit pour un marqueur
 ```
+
+## Objet `preparation` rendu par `preparer()` (lot 3a)
+
+Les lots 3b et 3c le consomment sans le reconstruire. Il est gelé (`Object.freeze`).
+
+| Champ | Contenu |
+| --- | --- |
+| `nomBrancheBase` | nom de la base, tel qu'il part en `gh pr create --base` |
+| `referenceBase` | référence résolvable par git (`main` ou `origin/main`) |
+| `shaBase` | SHA de la base. Sert au diff de la PR |
+| `shaDepart` | SHA de `HEAD` **après** établissement de la branche de travail |
+| `branche` | nom de la branche de travail — vient de la sortie `branche` de la garde |
+| `reprise` | `'locale'` \| `'distante'` \| `false` |
+| `prefixeAuthentification` | arguments à placer avant `push`. **Jamais journalisé** |
+
+### Pourquoi `shaDepart` en plus de `shaBase`
+
+R9 et R4 se marchent dessus, et le lot 3a l'a montré à l'exécution. Quand la branche
+distante est reprise, elle porte déjà les commits du run précédent : compter
+`shaBase..HEAD` rend un résultat non nul **avant** le premier appel à aider, donc le
+contrôle R4 du lot 3c — « aider n'a rien commité, on ne publie pas » — ne détecte plus
+rien.
+
+Deux points de référence, deux questions différentes :
+
+- `shaBase` répond à « qu'est-ce que cette PR ajoute à la base ? » — c'est le diff
+  que verra le relecteur ;
+- `shaDepart` répond à « **ce run** a-t-il produit quelque chose ? » — c'est le seul
+  bon compteur pour R4.
+
+Les deux coïncident quand la branche est créée. Ne pas les confondre.
 
 ## Signatures des primitives de `resolve.js` (lot 3b)
 

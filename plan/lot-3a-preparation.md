@@ -111,6 +111,17 @@ après une PR fermée sans suppression, ou après un run annulé qui avait déj�
 `git switch -c` réussissait alors localement, et le push du lot 3c était rejeté en
 non-fast-forward — après avoir tout consommé.
 
+Le refspec est volontairement écrit **sans le `+` de forçage**. Si `refs/remotes/origin/<branche>`
+existe déjà localement et que la branche distante a été force-poussée entre-temps, le
+fetch échoue en non-fast-forward plutôt que d'écraser en silence. Le cas ne se produit
+pas derrière un `actions/checkout`, qui ne rapatrie qu'une seule ref. À dire au lot 6
+comme limite connue.
+
+Effet de bord à connaître pour 3b et 3c : ce `git fetch --depth=1` rend le dépôt
+shallow au commit repris — `.git/shallow` apparaît. Ce n'est pas un défaut à corriger,
+c'est ce que `--depth=1` achète ; vérifié, le comptage `<base>..HEAD` reste juste
+dans cet état.
+
 Le nom vient de la sortie `branche` de la garde, qui **fait foi**. Ne pas le
 reconstruire depuis `NUMERO_ISSUE` : la version précédente avait deux sources de vérité
 pour le même nom. `NUMERO_ISSUE` ne sert qu'aux commentaires et au `Résout #<n>`.
@@ -153,5 +164,16 @@ git config --get user.name      # deepseek-resolve[bot]
 git branch --show-current       # fix-issue-42
 ```
 
+Attention, ce dépôt jetable **n'a pas de remote**, alors que l'étape 5 interroge
+`origin`. Ce n'est pas une négligence du bloc, c'est une contrainte à traiter dans le
+code : quand `origin` est absent, sauter le contrôle R9 avec un `::warning::` explicite
+plutôt que de planter. Un runner a toujours un `origin` ; un script qui exige un remote
+n'est plus exerçable seul, et le lot perd sa vérifiabilité.
+
 Puis le cas R9 : créer un remote local jetable portant déjà `fix-issue-42`, relancer,
 et vérifier que la branche est **reprise** et non recréée.
+
+Contrôler enfin les deux points de référence de l'objet `preparation` (voir
+`contrat.md`) : sur une branche reprise, `git rev-list --count <shaBase>..HEAD` est
+non nul alors que `git rev-list --count <shaDepart>..HEAD` vaut **0**. C'est cet écart
+qui empêche R9 de neutraliser le contrôle R4 du lot 3c.
