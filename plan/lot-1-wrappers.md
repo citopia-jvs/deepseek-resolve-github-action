@@ -100,9 +100,11 @@ module.exports = { nettoyerTexteTiers, masquerSecrets, tronquer };
 ```
 
 - `nettoyerTexteTiers` : retire les commentaires HTML `<!-- … -->`, les caractères de
-  contrôle hors `\n` et `\t`, et les marques bidirectionnelles Unicode
-  (`U+202A`–`U+202E`, `U+2066`–`U+2069`). **Traite R6** : un bloc invisible dans le
-  rendu GitHub est le vecteur d'injection le plus discret.
+  contrôle — C0 **et C1**, soit `[\u0000-\u0008\u000B-\u001F\u007F-\u009F]`, hors `\n`
+  et `\t` — les marques bidirectionnelles Unicode (`U+202A`–`U+202E`, `U+2066`–`U+2069`)
+  et les autres invisibles exploitables : `U+200B`–`U+200F`, `U+2060`, `U+FEFF`.
+  **Traite R6** : un bloc invisible dans le rendu GitHub est le vecteur d’injection le
+  plus discret, et le critère est « invisible à la lecture », pas « bidirectionnel ».
 - `masquerSecrets` : remplace par `[SECRET RETIRÉ]` les motifs
   `gh[pousr]_[A-Za-z0-9]{36,}`, `github_pat_\w+`, `sk-[A-Za-z0-9]{20,}`, les JWT
   (`eyJ[\w-]+\.[\w-]+\.[\w-]+`), `AKIA[0-9A-Z]{16}`, et les blocs base64 de plus de

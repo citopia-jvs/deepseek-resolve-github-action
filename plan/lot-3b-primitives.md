@@ -185,7 +185,9 @@ action.yml, action.yaml, .github/actions/**
 .travis.yml, bitbucket-pipelines.yml, .buildkite/**, .drone.yml
 
 # gouvernance
-.github/CODEOWNERS, .github/settings.yml, .github/dependabot.yml, renovate.json
+CODEOWNERS                      # nu, donc à toute profondeur : GitHub honore
+                                # .github/, la racine et docs/
+.github/settings.yml, .github/dependabot.yml, renovate.json
 
 # exécuté à l'install ou au test
 package.json, package-lock.json, yarn.lock, pnpm-lock.yaml, .npmrc, .yarnrc.yml
@@ -200,7 +202,7 @@ jest.config.*, vitest.config.*, .mocharc.*, karma.conf.*, playwright.config.*
 .husky/**, .pre-commit-config.yaml, .git/**
 
 # conteneurs
-Dockerfile*, docker-compose*.y*ml, .devcontainer/**
+Dockerfile*, docker-compose*.y*ml, compose.yaml, compose.yml, .devcontainer/**
 
 # aider — R8
 .aider.conf.yml, .aider.model.metadata.json, .env, .env.*
@@ -210,6 +212,28 @@ Dockerfile*, docker-compose*.y*ml, .devcontainer/**
 précédente : le droit `workflows` du token ne les protège pas, et modifier une action
 composite du dépôt fait exécuter du code dans **tous** les workflows qui l'utilisent,
 y compris ceux qui portent d'autres secrets.
+
+### Point à trancher ici : les fichiers ignorés par git
+
+Constat relevé à la relecture du lot 1. `git status --porcelain` **omet les fichiers
+ignorés**. Si le dépôt consommateur ignore `.aider*`, un `.aider.conf.yml` déposé par
+aider est absent de `etatFichiers()` : la liste ne le refuse pas et rien ne le
+supprime. Il reste sur le disque, donc présent à **l’itération suivante**.
+
+R8 ne tient alors que par les trois flags — `--config`, `--env-file /dev/null`,
+`--model-metadata-file` — qui pointent tous sur des fichiers embarqués dans l’action
+et court-circuitent la recherche dans le git root. C’est suffisant, mais cela veut
+dire que la liste de chemins est de la défense en profondeur, pas la mesure principale.
+
+Deux options, à trancher en écrivant `commiterTravail` :
+
+1. `etatFichiers()` gagne une option `inclureIgnores` (`--porcelain -z --ignored`), et
+   `commiterTravail` supprime les chemins interdits même ignorés. Coût : un dépôt
+   consommateur avec `node_modules/` ignoré rend des milliers d’entrées, à filtrer.
+2. On assume que les flags suffisent, et le lot 6 dit explicitement que la liste ne
+   couvre pas les fichiers ignorés.
+
+Toute option retenue se répercute dans `contrat.md` **avant** le code.
 
 À documenter au lot 6 : cette liste n'est pas exhaustive, et elle ne peut pas l'être.
 Un backdoor dans `src/index.js` reste un backdoor. C'est la relecture humaine qui

@@ -108,14 +108,20 @@ gh(args, { json = false, tolererEchec = false })   // --repo ajouté par l'appel
 git(args, { tolererEchec = false })                // stdout trimmé
 aDesCommits(base)                                  // booléen
 etatFichiers()                                     // [{ statut, chemin }] — pas juste des chemins
+                                                   // renommage ou copie : la destination garde le
+                                                   // statut brut de git ('R ', 'RM', 'C '),
+                                                   // l’origine porte la sentinelle 'R<'
 brancheDistanteExiste(nom)                         // booléen
 // chemins.js
 estCheminInterdit(chemin)                          // booléen — liste du lot 3b
+                                                   // impure : fait des lstat, donc à appeler
+                                                   // depuis GITHUB_WORKSPACE
 normaliser(chemin)                                 // refuse '..', absolus, liens
 // texte.js
 nettoyerTexteTiers(s)                              // retire commentaires HTML, contrôles, bidi
 masquerSecrets(s)                                  // motifs de jetons -> [SECRET RETIRÉ]
-tronquer(s, n)                                     // tête + queue
+tronquer(s, n)                                     // tête + queue — jamais la tête seule, même si n
+                                                   // est trop petit pour un marqueur
 ```
 
 ## Signatures des primitives de `resolve.js` (lot 3b)
