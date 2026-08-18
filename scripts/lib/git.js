@@ -36,9 +36,19 @@ function lancer(args, { tolererEchec = false } = {}) {
   // Jamais `shell: true` : une partie des arguments (message de commit, nom de
   // branche, chemins) dérive de texte rédigé par un tiers. `encoding: 'utf8'`,
   // sinon stdout est un Buffer.
+  //
+  // `GIT_LITERAL_PATHSPECS=1` n'est pas une précaution théorique, c'est mesuré : les
+  // chemins passés à `add`, `checkout`, `ls-files` et `diff` sont choisis par le
+  // modèle, et git les interprète par défaut comme des PATHSPECS, pas comme des noms
+  // de fichiers. Un fichier réellement nommé « * » suffisait : `git add -- '*'`
+  // stageait tout l'arbre sale, dont un `.env` que `commiterTravail` venait
+  // explicitement de refuser, et `git ls-files -- 'Dockerfile*'` déclarait « suivi »
+  // un fichier qui n'existait pas. La variable rend la littéralité globale : aucun
+  // appel de ce dépôt n'a besoin de la magie de pathspec.
   const resultat = spawnSync(BINAIRE, args, {
     encoding: 'utf8',
     maxBuffer: TAILLE_MAX_SORTIE,
+    env: { ...process.env, GIT_LITERAL_PATHSPECS: '1' },
   });
 
   // `git -c http.extraheader=...` porte le jeton de push dans son argv, et une
@@ -113,6 +123,14 @@ function aDesCommits(base) {
  * « pathspec did not match any file known to git ». Un simple rapport de
  * couverture ferait donc planter la boucle du lot 3b.
  *
+ * `-uall` n’est pas décoratif : le défaut de git est `-unormal`, qui replie un
+ * répertoire non suivi en UNE entrée (« ?? sous/ »). `estCheminInterdit()` ne
+ * refuse pas « sous/ », et un `git add -- sous/` ajouterait alors tout son
+ * contenu, y compris un `sous/package.json` que la liste interdit. Mesuré : la
+ * configuration globale d’un poste de dev peut porter
+ * `status.showUntrackedFiles=all` et masquer ce comportement — le runner, lui, a
+ * le défaut.
+ *
  * `-z` plutôt que le format texte : cela règle d'un coup les chemins avec retour
  * à la ligne, guillemets ou caractères non ASCII, qui pourraient sinon échapper
  * au contrôle de liste interdite.
@@ -123,7 +141,7 @@ function aDesCommits(base) {
  * @returns {{ statut: string, chemin: string }[]}
  */
 function etatFichiers() {
-  const brut = lancer(['status', '--porcelain', '-z']).stdout;
+  const brut = lancer(['status', '--porcelain', '-z', '-uall']).stdout;
   const morceaux = brut.split(NUL);
   const entrees = [];
 

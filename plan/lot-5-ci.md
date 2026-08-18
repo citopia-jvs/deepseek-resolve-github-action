@@ -46,7 +46,18 @@ Ajouter le contrôle de cohérence `inputs:` ↔ `${{ inputs.* }}` décrit au lo
 faute de frappe dans un nom d'input s'évalue en chaîne vide sans erreur : aucun autre
 contrôle ne l'attrape.
 
-## Job 2 — La garde
+## Job 2 — La bibliothèque
+
+`node test/chemins.test.js`, ajouté en écrivant le lot 3b. Il exerce `estCheminInterdit`
+et `normaliser` directement, sans dépôt jetable ni sous-processus.
+
+Pourquoi un test à part alors que `boucle.test.js` exerce déjà des chemins interdits :
+celui-ci n'en traverse que cinq (`.github/workflows/**`, `.aider.conf.yml`, `.env`,
+`package.json`, `Makefile`). Retirer `Jenkinsfile`, `renovate.json` ou
+`.github/actions/**` de la liste ne faisait rougir aucun cas — relevé en mesurant les
+mutations, pas en lisant le code.
+
+## Job 3 — La garde
 
 `node test/garde.test.js`, livré par le lot 2 avec ses dix fixtures.
 
@@ -76,7 +87,7 @@ vaut **0 partout**, y compris les refus. Un refus n'est pas une panne, et une ac
 `GH_CLI=__fixtures__/gh-stub.sh` — le stub versionné, qui écrit `[]`. Pas `/bin/true` :
 stdout serait vide et `JSON.parse('')` lèverait.
 
-## Job 3 — La boucle, hors ligne
+## Job 4 — La boucle, hors ligne
 
 **Nouveau.** C'est ce que le stub `AIDER_CLI` du lot 1 débloque.
 
@@ -89,6 +100,18 @@ cinq scénarios du lot 3c et les quatre du lot 3b, dont :
 - **R3** : le stub écrit `.github/workflows/ci.yml` → le chemin est refusé et
   n'apparaît pas dans `git log --name-only`.
 - **R8** : le stub écrit `.aider.conf.yml` → refusé.
+- **R8, chemin des fichiers ignorés** : un dépôt jetable dont le `.gitignore` porte
+  `.aider*` et `.env`, dans lequel le stub dépose `.aider.conf.yml` et un `.env` :
+  les deux sont invisibles à `git status`, et `appelerAider` doit tout de même avoir
+  supprimé le premier et déplacé le second avant l'appel suivant. Sans ce cas, la
+  neutralisation peut disparaître sans qu'aucun test ne rougisse.
+- **Repli des répertoires non suivis** : le test doit tourner avec
+  `GIT_CONFIG_GLOBAL=/dev/null` et `GIT_CONFIG_SYSTEM=/dev/null`. Le stub écrit
+  `sous/dossier/package.json` dans un répertoire non suivi ; sans le `-uall`
+  d'`etatFichiers()`, git rend une seule entrée `?? sous/` que la liste interdite ne
+  refuse pas, et le chemin interdit est commité. Le harnais qui hérite de la
+  configuration globale du poste — `status.showUntrackedFiles=all` est courant — ne
+  voit pas le défaut.
 - **R6** : une fixture avec un `<!-- … -->` → le bloc est absent du prompt construit.
 - **R4** : le stub n'écrit rien → aucune PR, code de sortie 0.
 - Le compte d'itérations, avec `MAX_ITERATIONS=2`.
@@ -97,7 +120,7 @@ Ce job est ce qui rend les lots 3b et 3c **signables par leur exécutant**. Dans
 version précédente, ils ne l'étaient pas : leur seule vérification exigeait une vraie
 clé API et un dépôt distant.
 
-## Job 4 — Smoke du composite, en local
+## Job 5 — Smoke du composite, en local
 
 ```yaml
 smoke-local:
@@ -131,9 +154,9 @@ planter ». C'est pour cela que le lot 4 expose des `outputs:`.
 - **pas la résolution de `$GITHUB_ACTION_PATH`** — en `uses: ./`, cette variable vaut
   `GITHUB_WORKSPACE` (`ActionManager.cs:697-704`). Un `node scripts/garde.js` en chemin
   **relatif** passerait ce job et casserait chez tout consommateur en
-  `uses: owner/repo@v1`. D'où le job 5.
+  `uses: owner/repo@v1`. D'où le job 6.
 
-## Job 5 — Smoke du composite, par référence distante
+## Job 6 — Smoke du composite, par référence distante
 
 ```yaml
 smoke-distant:

@@ -93,8 +93,16 @@ const NOMS_INTERDITS = [
   'compose.yaml',
   'compose.yml',
   // aider — R8
+  //
+  // Les deux premiers sont les fichiers de configuration qu'aider relit au tour
+  // suivant. Le motif large qui suit couvre le reste de ses fichiers de travail :
+  // mesuré, `.aider.chat.history.md`, `.aider.input.history` et
+  // `.aider.tags.cache.v4/**` entraient dans le commit — `--no-gitignore` empêche
+  // justement aider de les ignorer — et, devenus suivis, ils n'étaient plus jamais
+  // retirés. Chaque PR emportait l'historique de conversation et un cache binaire.
   '.aider.conf.yml',
   '.aider.model.metadata.json',
+  '.aider*',
   '.env',
   '.env.*',
 ];
@@ -204,6 +212,13 @@ function refuserLiens(segments) {
  * @returns {boolean}
  */
 function estCheminInterdit(chemin) {
+  // Une entrée qui finit par « / » est un répertoire que git a rendu replié. Le
+  // `-uall` d'`etatFichiers()` déplie les répertoires non suivis ordinaires, mais
+  // PAS un dépôt git imbriqué : mesuré, `?? imbrique/` reste une seule entrée, et
+  // `git add -- imbrique` enregistre alors un gitlink vers un commit absent du
+  // dépôt poussé. On refuse, plutôt que de risquer un lien cassé dans la PR.
+  if (typeof chemin === 'string' && chemin.endsWith('/')) return true;
+
   let normalise;
   try {
     normalise = normaliser(chemin);
@@ -217,6 +232,14 @@ function estCheminInterdit(chemin) {
     if (bas === repertoire || bas.startsWith(`${repertoire}/`)) return true;
   }
   if (CHEMINS_MINUSCULES.includes(bas)) return true;
+
+  // N'IMPORTE QUEL segment qui commence par « .aider », en plus du nom de fichier :
+  // sans cette règle, `.aider.tags.cache.v4/cache.db` passait, parce que son nom de
+  // fichier ne ressemble à rien d'interdit. Le contrôle porte sur tous les segments et
+  // pas seulement le premier, pour qu'un `sous/.aider.tags.cache.v4/cache.db` ne
+  // rouvre pas le même trou — aider écrit à la racine du git root, mais la règle ne
+  // doit pas dépendre de cette habitude.
+  if (bas.split('/').some((segment) => segment.startsWith('.aider'))) return true;
 
   const nom = bas.slice(bas.lastIndexOf('/') + 1);
   return REGEX_NOMS.some((regex) => regex.test(nom));

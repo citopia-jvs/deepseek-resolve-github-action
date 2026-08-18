@@ -1,7 +1,7 @@
 # Lot 3b — Les primitives
 
 **Dépend de** : lot 3a. **Fichier** : `scripts/resolve.js`, partie centrale.
-Lire [`contrat.md`](contrat.md) : ce lot écrit **exactement** les six fonctions dont
+Lire [`contrat.md`](contrat.md) : ce lot écrit **exactement** les sept fonctions dont
 les signatures y figurent, et **aucune boucle**. Le lot 3c écrira l'orchestrateur qui
 les appelle.
 
@@ -36,6 +36,15 @@ D'où :
 
 Ces trois fichiers sont livrés par l'action, hors d'atteinte du modèle. Et les chemins
 correspondants figurent dans la liste interdite ci-dessous.
+
+**Correction relevée dans le wheel en écrivant ce lot : ces trois flags ne
+court-circuitent PAS la recherche dans le git root.** `main.py:463-477` construit
+`default_config_files` (cwd, racine git, `$HOME`) quelle que soit la valeur de
+`--config`, et `main.py:361-387` charge `<racine git>/.env` **après**
+`--env-file` avec `override=True` — donc un `.env` déposé à la racine gagne contre
+`/dev/null`. Le mécanisme réel, et la neutralisation ciblée qu'il impose, sont écrits
+dans `plan/contrat.md`, section « R8 : ce que les flags ferment, et ce qu'ils ne
+ferment pas ». Ce qui suit reste vrai ; ce n'est simplement pas suffisant.
 
 ### Modèle et métadonnées — R5
 
@@ -129,8 +138,17 @@ Puisque `--no-auto-commits` est passé, c'est l'action qui commite. C'est ce qui
 R2 et R3 d'un seul geste.
 
 ```
-1. etatFichiers()                       # [{statut, chemin}], via --porcelain -z
-2. ignorer les entrées '??'             # non suivies : ni commit -a ni add ne les prend
+1. etatFichiers()                       # [{statut, chemin}], via --porcelain -z -uall
+2. traiter les entrées '??' comme les autres
+     # Corrigé en écrivant ce lot. La version précédente les jetait, au motif que
+     # « ni commit -a ni add ne les prend » : c'est faux, « git add -- <chemin> »
+     # prend un fichier non suivi. Les jeter aurait fait perdre tout fichier
+     # NOUVEAU créé par aider — le cas le plus courant — et laissé sur le disque
+     # un fichier interdit qu'il vient de déposer, présent au tour suivant.
+     # Le '-uall' de l'étape 1 est ce qui rend ce traitement sûr : sans lui, git
+     # replie un répertoire non suivi en une seule entrée « ?? sous/ », que la
+     # liste interdite ne refuse pas et dont « git add -- sous/ » emporterait tout
+     # le contenu.
 3. normaliser chaque chemin             # refuse '..', absolus, .git/
 4. partitionner selon estCheminInterdit()
 5. restaurer les chemins interdits :
@@ -225,7 +243,20 @@ Deux issues, à trancher en écrivant `test/boucle.test.js` : ajouter `title` et
 seconde est préférable : les fixtures de la garde documentent des cas d'autorisation, et
 les gonfler de champs qu'elle ne lit pas rendrait illisible ce que chacune démontre.
 
-### Point à trancher ici : les fichiers ignorés par git
+### Point tranché : les fichiers ignorés par git
+
+**Décision prise en écrivant le lot** : option 2 pour la liste de chemins — pas de
+`--ignored` dans `etatFichiers()` — mais l'option 2 telle qu'elle est décrite
+ci-dessous s'appuie sur une affirmation fausse (« les trois flags suffisent »). Le
+mécanisme réel et la neutralisation ciblée qui en découle sont dans
+`plan/contrat.md`, section « R8 : ce que les flags ferment, et ce qu'ils ne ferment
+pas ». Deux corrections s'y ajoutent : `etatFichiers()` passe désormais `-uall`, et
+les entrées `??` ne sont plus jetées.
+
+Le texte d'origine est conservé ci-dessous parce qu'il documente le raisonnement de
+coût qui a écarté `--ignored`, et celui-là reste valable.
+
+#### Texte d'origine
 
 Constat relevé à la relecture du lot 1. `git status --porcelain` **omet les fichiers
 ignorés**. Si le dépôt consommateur ignore `.aider*`, un `.aider.conf.yml` déposé par
@@ -331,7 +362,7 @@ gh pr create --repo … --head <BRANCHE> --base <base> --title … --body-file <
   relecteur sache où regarder en premier.
 - Sur un push non-fast-forward malgré le lot 3a : `--force-with-lease`, jamais `--force`.
 
-## `publierTour(i, resultat)` et `publierCompteRendu(bilan)`
+## `publierTour(config, i, resultat)` et `publierCompteRendu(config, bilan)`
 
 - Par itération : succès ou échec de la validation, et l'intention du tour suivant.
 - **Ne jamais recopier de sortie de validation brute** dans un commentaire. Publier le

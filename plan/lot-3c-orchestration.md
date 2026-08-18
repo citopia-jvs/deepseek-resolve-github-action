@@ -6,34 +6,57 @@ Lire [`contrat.md`](contrat.md).
 ## Objectif
 
 Composer les primitives du lot 3b. **Ce lot n'écrit aucune primitive** : il n'appelle
-que les six fonctions dont le contrat fixe les signatures. S'il manque une capacité,
+que les sept fonctions dont le contrat fixe les signatures. S'il manque une capacité,
 elle s'ajoute au lot 3b, pas ici.
 
 ## La boucle
 
+**Réécrit après l'écriture du lot 3b.** La version précédente appelait les primitives
+sans `config`, inventait un `consigneCorrection(...)` qui n'existe pas, et refaisait
+ici le masquage et la troncature des logs — que le lot 3b fait désormais à la source.
+Les signatures ci-dessous sont celles de `contrat.md`, sans exception.
+
 ```
-consigne = construireConsigne()                       # lot 3b
-r = appelerAider(consigne)
+consigne = construireConsigne(config)                 # lot 3b
+r = appelerAider(config, consigne)
 si r.codeSortie != 0 → arrêt immédiat, compte rendu d'échec technique
 
 c = commiterTravail("Résolution de l'issue #<n>")
-si !aDesCommits(base) → chemin R4, ci-dessous
+si !aDesCommits(preparation.shaDepart) → chemin R4, ci-dessous
 
-pr = publierInitial(consigne)                         # push + gh pr create
+pr = publierInitial(config, preparation, consigne)    # push + gh pr create
 
 pour i de 1 à MAX_ITERATIONS :
-    v = executerValidation()
-    publierTour(i, v)
+    v = executerValidation(config)
+    publierTour(config, i, {
+        validationOk: v.codeSortie == 0,
+        codeSortieValidation: v.codeSortie,
+        premierEchec: v.premierEchec,
+        refuses: c.refuses,
+        derniereIteration: i == MAX_ITERATIONS,
+    })
     si v.codeSortie == 0 → succès, sortir
     si i == MAX_ITERATIONS → échec, sortir
 
-    r = appelerAider(consigneCorrection(tronquer(masquerSecrets(v.logs), 8000)))
+    r = appelerAider(config, construireConsigne(config, { logsEchec: v.logs }))
     si r.codeSortie != 0 → arrêt immédiat, échec technique
     c = commiterTravail("Itération <i+1> : correction")
     si c.commite → push
 
-publierCompteRendu(bilan)
+publierCompteRendu(config, bilan)
 ```
+
+Trois points que cette réécriture fige :
+
+- **`aDesCommits(preparation.shaDepart)`, jamais `shaBase`.** Sur une branche reprise,
+  `shaBase..HEAD` est déjà non nul avant le premier appel à aider, et le contrôle R4 ne
+  détecte plus rien. Cf. `contrat.md`, « Pourquoi `shaDepart` en plus de `shaBase` ».
+- **Ni `masquerSecrets` ni `tronquer` ici.** `executerValidation` rend des `logs` déjà
+  masqués, et `construireConsigne` tronque `logsEchec` lui-même. Les refaire au lot 3c
+  donnerait deux vérités sur la même donnée.
+- **`v.logs` ne part jamais dans un commentaire.** Seuls `codeSortie` et `premierEchec`
+  sont publiables ; c'est la raison d'être du troisième champ rendu par
+  `executerValidation`.
 
 ## Pourquoi pas `--auto-test`
 

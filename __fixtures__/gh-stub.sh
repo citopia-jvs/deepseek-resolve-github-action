@@ -26,6 +26,15 @@
 #                                 permission-refusee
 #                                   toute demande de permission répond 404 -> la
 #                                   garde doit être fail-closed (lot 2, étage 2).
+#                                 pr-existe-deja
+#                                   `pr create` ÉCHOUE avec le message de gh (« a
+#                                   pull request already exists ») et `pr list`
+#                                   renvoie la PR. C'est le cas réel : la garde ne
+#                                   refuse que les PR ouvertes AU MOMENT où elle
+#                                   passe. Sans ce scénario, le repli de
+#                                   `publierInitial` sur `numeroPrOuverte()` n'a
+#                                   aucun test, et le remplacer par « null »
+#                                   resterait vert.
 #                                 echec
 #                                   TOUTE commande sort en GH_STUB_CODE_SORTIE.
 #                                 echec-pr-list
@@ -75,6 +84,15 @@
 #                               Chaque test doit en fixer un qui lui est propre,
 #                               sinon les appels de deux tests se mélangent.
 #
+#   GH_STUB_COPIE_CORPS         Répertoire où le CONTENU de tout « --body-file »
+#                               est recopié, sous le nom « corps-<numéro
+#                               d'appel>.md ». Sans cette copie, rien ne peut
+#                               vérifier ce qui aurait été publié : `resolve.js`
+#                               écrit le corps dans un temporaire qu'il supprime
+#                               dès le retour de l'appel (`avecFichierCorps`). Le
+#                               numéro d'appel est celui du journal, ce qui permet
+#                               d'apparier un corps et son argv.
+#
 # ─── Format du journal ────────────────────────────────────────────────────────
 #
 # Un appel = les arguments séparés par un octet NUL (\0), suivis d'un octet
@@ -94,7 +112,24 @@ set -uo pipefail
 journal="${GH_STUB_JOURNAL:-${TMPDIR:-/tmp}/gh-stub-journal}"
 mkdir -p "$(dirname "$journal")" 2>/dev/null || true
 { printf '%s\0' "$@"; printf '\036'; } >>"$journal"
-printf 'gh-stub: %s\n' "$*" >&2
+
+# Numéro de cet appel = nombre de séparateurs d'enregistrement dans le journal.
+appel="$(tr -cd '\036' <"$journal" | wc -c | tr -d ' ')"
+
+printf 'gh-stub: appel %s : %s\n' "$appel" "$*" >&2
+
+# Copie du corps passé en « --body-file », avant que resolve.js ne supprime son
+# temporaire.
+if [ -n "${GH_STUB_COPIE_CORPS:-}" ]; then
+  mkdir -p "$GH_STUB_COPIE_CORPS" 2>/dev/null || true
+  precedent=""
+  for arg in "$@"; do
+    if [ "$precedent" = "--body-file" ] && [ -f "$arg" ]; then
+      cp "$arg" "$GH_STUB_COPIE_CORPS/corps-$appel.md"
+    fi
+    precedent="$arg"
+  done
+fi
 
 scenario="${GH_STUB_SCENARIO:-nominal}"
 numero_pr="${GH_STUB_NUMERO_PR:-1}"
@@ -194,14 +229,22 @@ case "${1:-} ${2:-}" in
       printf 'gh-stub: « pr list » en échec simulé (scénario « echec-pr-list »)\n' >&2
       exit "${GH_STUB_CODE_SORTIE:-1}"
     fi
-    if [ "$scenario" = "pr-ouverte" ]; then
+    if [ "$scenario" = "pr-ouverte" ] || [ "$scenario" = "pr-existe-deja" ]; then
       printf '[{"number":%s,"url":"https://github.com/%s/pull/%s","state":"OPEN"}]\n' \
         "$numero_pr" "$depot" "$numero_pr"
     else
       printf '[]\n'
     fi
     ;;
-  "pr create"|"pr comment"|"issue comment"|"pr view")
+  "pr create")
+    if [ "$scenario" = "pr-existe-deja" ]; then
+      printf 'a pull request for branch "%s" into branch "main" already exists\n' \
+        "${3:-inconnue}" >&2
+      exit 1
+    fi
+    printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"
+    ;;
+  "pr comment"|"issue comment"|"pr view")
     # `gh` écrit l'URL de l'objet créé ou consulté : c'est là que resolve.js lit
     # le numéro de PR.
     printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"

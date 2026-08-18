@@ -49,6 +49,22 @@
 #                            espaces. Permet d'exercer un chemin interdit de la
 #                            liste du lot 3b sans ajouter de scénario.
 #
+#   AIDER_STUB_RENOMMER      Couple « source destination » passé à « git mv ».
+#                            Un renommage a DEUX côtés, et git les rend sur deux
+#                            entrées consécutives : c'est le seul moyen d'exercer
+#                            la règle du contrat « si l'un des deux côtés est
+#                            interdit, les deux sont refusés ». Commiter la moitié
+#                            d'un renommage laisserait un dépôt incohérent.
+#
+#   AIDER_STUB_STAGE         Chemins à « git add » après écriture, séparés par des
+#                            espaces. Le vrai aider STAGE les fichiers qu'il
+#                            édite (`repo.py`), même avec `--no-auto-commits` :
+#                            sans ce scénario, l'étape « vider l'index » de
+#                            `commiterTravail` n'a aucun test, et la retirer
+#                            laisserait un chemin interdit déjà stagé entrer dans
+#                            le commit — `git checkout --` reprend le contenu de
+#                            l'INDEX, pas celui de HEAD.
+#
 #   AIDER_STUB_SORTIE        Texte écrit sur stdout à la place de la sortie par
 #                            défaut. Sert à faire remonter un motif dans le
 #                            compte rendu (« rien à faire », par exemple).
@@ -61,6 +77,29 @@
 #                            dans le répertoire de travail polluerait
 #                            `git status` et fausserait les tests de commit.
 #                            Chaque test doit en fixer un qui lui est propre.
+#
+#   AIDER_STUB_JOURNAL_ENV   Fichier où l'ENVIRONNEMENT REÇU est écrit, une
+#                            variable par ligne, trié. C'est le seul moyen de
+#                            vérifier R7 côté aider (« il ne reçoit jamais
+#                            GH_TOKEN ») et la liste blanche
+#                            d'`environnementAider()` : une liste noire laisserait
+#                            passer GITHUB_* et les variables du harnais. Écrasé
+#                            à chaque appel, donc il décrit le DERNIER appel.
+#
+#   AIDER_STUB_JOURNAL_VU    Fichier où le stub note, en AJOUT, les cibles de
+#                            découverte d'aider visibles dans le répertoire de
+#                            travail AU MOMENT de l'appel : « .aider.conf.yml »,
+#                            « .aider.model.metadata.json » et « .env ». Sans
+#                            cela, la neutralisation R8 de `appelerAider` n'est
+#                            observable qu'après coup, et un `.env` supprimé puis
+#                            réécrit passerait pour un `.env` jamais vu.
+#
+#   AIDER_STUB_ATTENTE       Nombre de secondes de sommeil avant d'écrire quoi que
+#                            ce soit. Sert à dépasser la borne de durée
+#                            (MINUTES_MAX_APPEL_AIDER) : le stub est alors tué par
+#                            SIGTERM et `appelerAider` doit rendre 124. Le journal
+#                            d'argv est écrit AVANT le sommeil, pour que l'appel
+#                            interrompu reste comptabilisé.
 #
 # Tous les chemins écrits le sont en AJOUT (>>). Si le fichier est déjà suivi
 # par git, l'appel produit une modification ; sinon, une création. Les deux
@@ -94,6 +133,34 @@ mkdir -p "$(dirname "$journal")" 2>/dev/null || true
 appel="$(tr -cd '\036' <"$journal" | wc -c | tr -d ' ')"
 
 printf 'aider-stub: appel %s dans %s : %s\n' "$appel" "$PWD" "$*" >&2
+
+# Liste des variables de pilotage effectivement reçues. Elle part sur stderr,
+# donc dans la « sortie » que `appelerAider` renvoie : c'est ce qui rend
+# observable la trappe de test d'`environnementAider()` — sans AIDER_CLI, cette
+# liste doit être VIDE, y compris si le harnais a posé les variables.
+printf 'aider-stub: variables AIDER_STUB_* reçues : [%s]\n' "${!AIDER_STUB_*}" >&2
+
+if [ -n "${AIDER_STUB_JOURNAL_ENV:-}" ]; then
+  mkdir -p "$(dirname "$AIDER_STUB_JOURNAL_ENV")" 2>/dev/null || true
+  env | sort >"$AIDER_STUB_JOURNAL_ENV"
+fi
+
+# Ce que le stub VOIT du dépôt : les trois cibles de découverte d'aider (R8).
+if [ -n "${AIDER_STUB_JOURNAL_VU:-}" ]; then
+  mkdir -p "$(dirname "$AIDER_STUB_JOURNAL_VU")" 2>/dev/null || true
+  for cible in .aider.conf.yml .aider.model.metadata.json .env; do
+    if [ -e "$cible" ]; then
+      printf 'appel %s voit %s\n' "$appel" "$cible" >>"$AIDER_STUB_JOURNAL_VU"
+    fi
+  done
+fi
+
+# Sommeil AVANT toute écriture : le stub doit être tué par la borne de durée sans
+# avoir rien produit.
+if [ -n "${AIDER_STUB_ATTENTE:-}" ]; then
+  printf 'aider-stub: sommeil de %s seconde(s) (borne de durée)\n' "$AIDER_STUB_ATTENTE" >&2
+  sleep "$AIDER_STUB_ATTENTE"
+fi
 
 scenario="${AIDER_STUB_SCENARIO:-nominal}"
 fichier="${AIDER_STUB_FICHIER:-resultat-aider.txt}"
@@ -139,6 +206,27 @@ esac
 
 for chemin_supp in ${AIDER_STUB_CHEMINS_SUPP:-}; do
   ecrire "$chemin_supp"
+done
+
+# Renommage, comme un « /rename » suivi d'une édition. « git mv » stage les deux
+# côtés : le statut vu par etatFichiers() est bien « R  ».
+if [ -n "${AIDER_STUB_RENOMMER:-}" ]; then
+  renommer_source="${AIDER_STUB_RENOMMER%% *}"
+  renommer_cible="${AIDER_STUB_RENOMMER##* }"
+  if git mv -- "$renommer_source" "$renommer_cible" 2>/dev/null; then
+    printf 'aider-stub: renommé %s -> %s\n' "$renommer_source" "$renommer_cible" >&2
+  else
+    printf 'aider-stub: « git mv -- %s %s » a échoué\n' "$renommer_source" "$renommer_cible" >&2
+  fi
+fi
+
+# Comme le vrai aider : les fichiers édités sont stagés, même sans auto-commit.
+for chemin_stage in ${AIDER_STUB_STAGE:-}; do
+  if git add -- "$chemin_stage" 2>/dev/null; then
+    printf 'aider-stub: stagé %s\n' "$chemin_stage" >&2
+  else
+    printf 'aider-stub: « git add -- %s » a échoué\n' "$chemin_stage" >&2
+  fi
 done
 
 if [ -n "${AIDER_STUB_SORTIE:-}" ]; then

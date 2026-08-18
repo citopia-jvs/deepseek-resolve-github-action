@@ -209,6 +209,41 @@ n'est atténué.
   exhaustive** et ne peut pas l'être : un backdoor dans un fichier source ordinaire reste
   un backdoor. C'est la relecture humaine qui protège.
 
+- **Le nom du premier test en échec est publié, et c'est un canal résiduel.** Chaque
+  commentaire d'itération contient le code de sortie et le nom du premier test en échec
+  — jamais la sortie brute. Ce nom est masqué et borné, mais il est écrit par du code
+  que le modèle vient de produire : un secret découpé en deux morceaux sur deux
+  itérations échappe au masquage, qui travaille motif par motif. Deux itérations
+  suffisent. C'est le prix d'un compte rendu exploitable ; il n'y a pas de correctif,
+  seulement le fait de le savoir.
+
+- **Le code exécuté par `validation-command` peut réécrire les fichiers de l'action.**
+  Il tourne avec les droits du runner, donc `$GITHUB_ACTION_PATH` lui est accessible en
+  écriture. La configuration d'aider est protégée — l'action la matérialise à chaque
+  appel depuis une copie lue au démarrage — mais un step ultérieur du même job qui
+  relit un fichier de l'action n'a pas cette garantie. Sur un dépôt où ce risque
+  compte, exécuter l'action dans un job dédié, sans autre secret que le sien.
+
+- **La carte du dépôt est reconstruite à chaque itération.** Avant chaque validation,
+  l'action retire les `.aider*` non suivis de la racine du checkout, parce qu'une
+  commande de test qui globe peut les ramasser. Le cache de la carte du dépôt
+  (`.aider.tags.cache.*`) en fait partie : sur un gros dépôt, chaque tour paie donc la
+  reconstruction. C'est un coût de temps, pas un défaut.
+
+- **La liste ne couvre pas les fichiers ignorés par git, et aider lit la
+  configuration versionnée du dépôt.** `git status` ne montre pas les fichiers
+  ignorés, donc la liste de chemins interdits ne les voit pas. Pour les cibles de
+  configuration d'aider, l'action compense : avant chaque appel, elle supprime un
+  `.aider.conf.yml` ou un `.aider.model.metadata.json` **non suivi** à la racine du
+  checkout, et déplace un `.env` **non suivi** le temps de l'appel avant de le
+  remettre en place. Si votre workflow crée un `.env` avant d'appeler l'action, il
+  est bien restauré pour la commande de validation.
+
+  En revanche, un `.aider.conf.yml` ou un `.env` **versionné** dans votre dépôt est
+  lu par aider : les fichiers livrés par l'action gagnent clé par clé, mais une clé
+  qu'ils ne fixent pas retombe sur la vôtre. C'est votre choix versionné, l'action ne
+  le défait pas.
+
 - **Le code source part chez DeepSeek** — carte du dépôt et contenus de fichiers, à
   chaque appel. Sur un dépôt privé, c'est un transfert vers un tiers hors UE. À valider
   avant usage, et probablement disqualifiant en contexte professionnel.

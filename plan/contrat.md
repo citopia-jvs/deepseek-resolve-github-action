@@ -65,6 +65,7 @@ probable de tout le plan.
 | `MINUTES_MAX_APPEL_AIDER` | input `aider-call-timeout-minutes` |
 | `CONSIGNE_RESTREINTE` | sortie `consigne-restreinte` de la garde |
 | `GH_CLI`, `AIDER_CLI` | tests seulement — binaires injectables |
+| `AIDER_STUB_*` | tests seulement — pilotage du stub aider, héritées **uniquement si `AIDER_CLI` est posée** (voir ci-dessous) |
 
 ### `rendre-compte.js`
 
@@ -104,18 +105,29 @@ consommateur ne peut rien enchaîner et le smoke test du lot 5 n'a rien à contr
 ## Signatures exportées par `scripts/lib/`
 
 ```js
+// Tous les appels git passent `GIT_LITERAL_PATHSPECS=1`. Mesuré : les chemins viennent
+// du modèle, et git les lit comme des pathspecs — un fichier réellement nommé « * »
+// faisait que `git add -- '*'` stageait tout l'arbre sale, `.env` refusé compris.
 // gh.js
 gh(args, { json = false, tolererEchec = false })   // --repo ajouté par l'appelant
 // git.js
 git(args, { tolererEchec = false })                // stdout trimmé
 aDesCommits(base)                                  // booléen
 etatFichiers()                                     // [{ statut, chemin }] — pas juste des chemins
+                                                   // `--porcelain -z -uall` : sans `-uall`, git
+                                                   // replie un répertoire non suivi en UNE entrée
+                                                   // « ?? sous/ » et `git add -- sous/` emporte
+                                                   // tout son contenu, interdits compris
                                                    // renommage ou copie : la destination garde le
                                                    // statut brut de git ('R ', 'RM', 'C '),
                                                    // l’origine porte la sentinelle 'R<'
 brancheDistanteExiste(nom)                         // booléen
 // chemins.js
 estCheminInterdit(chemin)                          // booléen — liste du lot 3b
+                                                   // refuse aussi tout `.aider*` (nom ET premier
+                                                   // segment) et toute entrée finissant par « / » :
+                                                   // un dépôt git imbriqué reste replié même avec
+                                                   // `-uall`, et `git add` en ferait un gitlink cassé
                                                    // impure : fait des lstat, donc à appeler
                                                    // depuis GITHUB_WORKSPACE
 normaliser(chemin)                                 // refuse '..', absolus, liens
@@ -157,15 +169,172 @@ Deux points de référence, deux questions différentes :
 
 Les deux coïncident quand la branche est créée. Ne pas les confondre.
 
+
 ## Signatures des primitives de `resolve.js` (lot 3b)
 
 Le lot 3c les compose et n'en écrit aucune.
 
 ```js
-appelerAider(consigne)          // -> { codeSortie, sortie }
-executerValidation()            // -> { codeSortie, logs }   env filtrée
-commiterTravail(message)        // -> { commite: bool, refuses: string[] }
-publierInitial(prompt)          // -> { numeroPr }            push + gh pr create
-publierTour(i, resultat)        // -> void                    commentaire de PR
-publierCompteRendu(bilan)       // -> void
+construireConsigne(config, { logsEchec = '' } = {})  // -> string          R6
+appelerAider(config, consigne)                       // -> { codeSortie, sortie }
+executerValidation(config)                           // -> { codeSortie, logs, premierEchec }
+commiterTravail(message)                             // -> { commite: bool, refuses: string[] }
+publierInitial(config, preparation, prompt)          // -> { numeroPr }    push + gh pr create
+publierTour(config, i, resultat)                     // -> void            commentaire de PR
+publierCompteRendu(config, bilan)                    // -> void
 ```
+
+`config` et `preparation` sont passés en arguments plutôt que lus dans un état de
+module : c'est ce qui permet à `test/boucle.test.js` d'exercer une primitive seule,
+sans reconstruire tout l'environnement du runner.
+
+### `construireConsigne` — pourquoi une fonction, et au lot 3b
+
+Le lot 3c ne doit rédiger aucun texte destiné au modèle : toutes les règles de R6
+(hiérarchie instruction / contexte, `nettoyerTexteTiers`, mode consigne restreinte,
+lecture du titre et du corps **dans `GITHUB_EVENT_PATH`**) vivent ici. Le lot 3c
+n'appelle que `construireConsigne(config)` au premier tour, puis
+`construireConsigne(config, { logsEchec })` aux tours suivants avec les `logs`
+rendus par `executerValidation`.
+
+### `premierEchec`, troisième champ de `executerValidation`
+
+Le contrat en portait deux. Le troisième est ajouté parce que le lot 3b interdit de
+recopier une sortie de validation brute dans un commentaire de PR : le seul élément
+publiable est le nom du premier test en échec. L'extraire ici plutôt qu'au lot 3c
+évite que l'orchestrateur ait à lire `logs` — donc qu'il soit tenté de le publier.
+Chaîne vide si rien n'est reconnu.
+
+### Objet `resultat` de `publierTour`
+
+| Champ | Contenu |
+| --- | --- |
+| `validationOk` | booléen — la commande de validation est passée |
+| `codeSortieValidation` | entier, tel que rendu par le sous-processus |
+| `premierEchec` | nom du premier test en échec, `''` si inconnu |
+| `refuses` | chemins refusés à ce tour (`commiterTravail`) |
+| `derniereIteration` | booléen — commande la phrase d'intention du tour suivant |
+
+### Objet `bilan` de `publierCompteRendu`
+
+| Champ | Contenu |
+| --- | --- |
+| `succes` | booléen |
+| `iterations` | nombre de tours effectués |
+| `maxIterations` | borne, pour la phrase d'échec |
+| `motif` | cause de l'échec, chaîne vide si succès |
+| `refuses` | cumul dédupliqué des chemins refusés sur tous les tours |
+| `numeroPr` | numéro de PR, ou `null` si aucune PR n'a été ouverte |
+
+## Points tranchés au lot 3b
+
+### R8 : ce que les flags ferment, et ce qu'ils ne ferment pas
+
+**Relevé dans le wheel `aider-chat 0.86.2`, contre ce qu'affirmait le plan.** Les
+trois flags ne « court-circuitent » pas la recherche dans le git root :
+
+- `aider/main.py:463-477` construit `default_config_files` — répertoire courant,
+  racine git, `$HOME` — **quelle que soit** la valeur de `--config`, et
+  `configargparse` lit ces fichiers en plus du nôtre. Le nôtre gagne clé par clé,
+  parce qu'il est le plus à droite avant la ligne de commande ; mais **toute clé
+  absente de notre fichier retombe sur celui du dépôt**. Les options `store_true`
+  (`lint`, `test`, `commit`) ne sont même pas neutralisables depuis un fichier, et
+  `set-env` et `api-key` sont des options « append » : elles s'ajoutent, elles ne
+  s'écrasent pas.
+- `aider/main.py:361-387` et `:305-322` : `load_dotenv_files` charge
+  `$HOME/.env`, **`<racine git>/.env`**, `./.env` puis la valeur de `--env-file`,
+  liste renversée et chargée avec `override=True`. Un `.env` à la racine du
+  checkout est donc chargé **après** `--env-file /dev/null` et gagne. Un
+  `DEEPSEEK_API_BASE` déposé là exfiltre la clé et tous les prompts.
+
+Conséquence : les flags sont nécessaires mais ne suffisent pas. `appelerAider`
+neutralise donc, **avant chaque appel**, les cibles de découverte d'aider à la
+racine du checkout — indépendamment de git, donc y compris quand le dépôt
+consommateur les ignore :
+
+| Fichier | Traitement | Pourquoi ce traitement |
+| --- | --- | --- |
+| `.aider.conf.yml`, `.aider.model.metadata.json` | supprimé s'il n'est **pas** suivi par git, avec un `::warning::` qui le nomme | aucun usage légitime pendant notre run, et un dépôt qui en trouve un a probablement subi une tentative d'injection : le relecteur doit le voir |
+| `.env` | déplacé hors du dépôt avant l'appel, remis en place après (dans un `finally`) | une étape du workflow appelant peut légitimement en avoir créé un dont la commande de validation a besoin. Le supprimer casserait la validation |
+
+Une version **suivie** de ces fichiers n'est pas touchée : c'est un choix versionné
+du dépôt consommateur, et si le modèle la modifie, la modification apparaît dans
+`git status` — les fichiers ignorés ne masquent que les fichiers **non suivis** —
+donc `commiterTravail` la refuse et la restaure avant l'appel suivant.
+
+### `etatFichiers()` passe `-uall`, et ce n'est pas décoratif
+
+Corrigé dans `scripts/lib/git.js` en écrivant ce lot. Le défaut de git est
+`-unormal`, qui replie un répertoire non suivi en **une** entrée : `?? sous/`.
+`estCheminInterdit('sous/')` ne refuse rien, et `git add -- sous/` ajouterait tout
+son contenu, `sous/package.json` compris. Mesuré : une configuration globale
+`status.showUntrackedFiles=all` — courante sur un poste de dev — masque le
+comportement du runner, qui a le défaut.
+
+Ce qui reste écarté : l'option `--ignored`. Sur un dépôt consommateur qui ignore
+`node_modules/`, elle rendrait des milliers d'entrées à filtrer à chaque tour, pour
+un trou que la neutralisation ci-dessus ferme de façon ciblée.
+
+À documenter au lot 6 : la liste de chemins interdits ne couvre pas les fichiers
+ignorés par git ; un `.aider.conf.yml` ou un `.env` **suivi** par le dépôt
+consommateur est lu par aider ; et l'action déplace un `.env` non suivi le temps de
+l'appel à aider.
+### Un `.env` non suivi est refusé mais pas supprimé
+
+Exception unique à l'étape 5 de `commiterTravail` (« non suivi créé → supprimer le
+fichier »). Appliquée à la lettre à `.env`, cette étape détruirait définitivement le
+fichier que `appelerAider` vient de mettre à l'abri, et donc ce dont la commande de
+validation du dépôt consommateur a peut-être besoin. Un `.env` ou `.env.*` non suivi
+est donc **refusé, laissé en place, et signalé** par un `::warning::` — il n'est
+jamais stagé, et aider ne le voit pas.
+
+Aucune autre entrée ne mérite cette exception : un `package.json` déposé par le
+modèle est, lui, **exécuté** par la validation du tour suivant. Il doit disparaître du
+disque.
+
+Conséquence assumée : un `.env` légitime réapparaît dans `refuses` à chaque tour, donc
+dans chaque commentaire d'itération. Le bruit est préférable à l'invisibilité — si
+c'est le modèle qui l'a déposé, le relecteur doit le voir. Le cumul de `bilan.refuses`
+étant dédoublonné, le compte rendu final ne le cite qu'une fois.
+
+### La trappe `AIDER_STUB_*`
+
+L'environnement d'aider est une **liste blanche** (R7) : sans exception, elle
+supprimerait aussi les variables qui pilotent `__fixtures__/aider-stub.sh`, et
+`test/boucle.test.js` ne pourrait ni vérifier les flags, ni relire le prompt construit,
+ni **compter les appels** — c'est-à-dire l'essentiel de la vérification des lots 3b et
+3c.
+
+Les variables `AIDER_STUB_*` sont donc héritées, mais **seulement quand `AIDER_CLI` est
+posée** — variable que ce contrat réserve déjà aux tests. Sur un runner, `AIDER_CLI` est
+absente et l'environnement reste exactement la liste blanche. Tout test du harnais doit
+préfixer ses variables de pilotage `AIDER_STUB_`, et le harnais doit contrôler que la
+trappe est bien **fermée** sans `AIDER_CLI`.
+
+### `publierTour` adresse la PR par la branche
+
+Le contrat ne lui passe pas `numeroPr` : le commentaire part donc sur
+`gh pr comment <branche>`, que `gh` résout. `publierCompteRendu`, lui, reçoit
+`bilan.numeroPr` : il va sur la PR si le numéro existe, sinon sur l'issue — le cas
+« aucune PR ouverte » doit rester rapportable.
+
+### Les payloads de `test/boucle.test.js` lui appartiennent
+
+Les dix fixtures de la garde ne portent que les champs que `garde.js` lit : pas de
+`issue.title`, pas de `issue.body` dans les fixtures de commentaire. Le lot 3b leur
+ajoute des payloads séparés, préfixés `boucle-`, plutôt que de gonfler les
+existantes — celles-ci documentent des cas d'autorisation, et y verser des champs que
+la garde ne lit pas rendrait illisible ce que chacune démontre.
+
+## Fichiers de configuration livrés par l'action
+
+Écrits par le lot 3b côté flags, par le lot 4 côté contenu. Chemins **à la racine du
+dépôt de l'action**, donc atteints par `$GITHUB_ACTION_PATH` :
+
+| Fichier | Rôle |
+| --- | --- |
+| `aider.conf.yml` | configuration maîtrisée d'aider, hors d'atteinte du modèle — R8 |
+| `aider-models.json` | métadonnées des modèles DeepSeek V4, absents de `litellm` — R5 |
+
+Ils ne portent **pas** le préfixe `.` : `.aider.conf.yml` à la racine de ce dépôt
+serait à la fois le fichier livré et un chemin de la liste interdite.

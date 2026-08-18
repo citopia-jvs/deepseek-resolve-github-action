@@ -1,0 +1,11 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 42,
+    "title": "Erreur de calcul dans calculer()",
+    "body": "Le module de calcul se trompe : calculer(2, 2) rend 5 au lieu de 4.\n"
+  },
+  "comment": {
+    "body": "@dseek"
+  }
+}
