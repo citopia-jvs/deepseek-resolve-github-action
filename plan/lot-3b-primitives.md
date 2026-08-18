@@ -213,6 +213,18 @@ précédente : le droit `workflows` du token ne les protège pas, et modifier un
 composite du dépôt fait exécuter du code dans **tous** les workflows qui l'utilisent,
 y compris ceux qui portent d'autres secrets.
 
+### Les fixtures de la garde ne suffisent pas à ce lot
+
+Constat de l'exécutant du lot 2 : les huit fixtures de `__fixtures__` ne portent que les
+champs réellement lus par `garde.js`. `issue.title` est donc absent partout, et
+`issue.body` est absent des fixtures de commentaire — or la consigne construite ici a
+besoin des deux.
+
+Deux issues, à trancher en écrivant `test/boucle.test.js` : ajouter `title` et
+`issue.body` aux fixtures existantes, ou donner à ce test ses propres payloads. La
+seconde est préférable : les fixtures de la garde documentent des cas d'autorisation, et
+les gonfler de champs qu'elle ne lit pas rendrait illisible ce que chacune démontre.
+
 ### Point à trancher ici : les fichiers ignorés par git
 
 Constat relevé à la relecture du lot 1. `git status --porcelain` **omet les fichiers

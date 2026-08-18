@@ -167,7 +167,7 @@ pointe.
 
 ### 8. Écrire les sorties
 
-`poursuivre`, `issue`, `branche`, `motif` dans `GITHUB_OUTPUT`, une paire
+`poursuivre`, `issue`, `branche`, `consigne-restreinte`, `motif` dans `GITHUB_OUTPUT`, une paire
 `clé=valeur` par ligne. Pour une valeur susceptible de contenir un retour à la ligne
 (`motif`), utiliser la forme à délimiteur :
 
@@ -176,6 +176,15 @@ motif<<EOF_MOTIF
 …
 EOF_MOTIF
 ```
+
+Écrire les paires simples **avant** le bloc à délimiteur de `motif` : une paire
+placée après le `EOF_MOTIF` fermant serait avalée par la valeur si le délimiteur se
+fermait mal.
+
+`consigne-restreinte` est la cinquième sortie, ajoutée au contrat après ce lot : sans
+elle, le mode consigne restreinte de l'étage 2 bis reste un simple message de journal et
+n'atteint jamais le lot 3b, donc l'atténuation de R6 promise plus haut est inopérante de
+bout en bout.
 
 `GITHUB_OUTPUT` est hérité par le process Node enfant ; `fs.appendFileSync` suffit.
 
@@ -207,6 +216,8 @@ lus. Un payload GitHub complet fait plusieurs centaines de lignes.
 | `commentaire-reedite.json` | `edited`, `changes.body.from` contient déjà `@dseek` | `false` |
 | `evenement-push.json` | `GITHUB_EVENT_NAME=push` | `false` |
 | `issue-auteur-non-de-confiance.json` | `issue_comment` `OWNER` sur une issue d'un `NONE` | `true`, mode consigne restreinte |
+| `issue-mention-cachee.json` | `issues`, `@dseek` **uniquement** dans un `<!-- … -->` | `false` |
+| `commentaire-reedite-mention-cachee.json` | `edited`, `changes.body.from` porte `<!-- @dseek -->` | `false` |
 
 `commentaire-avec-dseek.json` manquait dans la version précédente. C'était le seul cas
 qui exerce l'endpoint de réaction **commentaire** — précisément le piège que ce lot
@@ -215,6 +226,17 @@ test.
 
 `evenement-push.json` manquait aussi, et c'est exactement le chemin qu'emprunte le
 smoke test du lot 5.
+
+Les deux dernières fixtures sont venues de la relecture, et chacune verrouille un
+arbitrage qui sans elle pouvait être défait sans faire rougir un seul test :
+
+- `issue-mention-cachee.json` — la mention du texte courant est cherchée dans le texte
+  **nettoyé**, pour que la mention qui déclenche soit celle que le lecteur voit (R6).
+  Sans cette fixture, retirer `nettoyerTexteTiers` laissait le harnais entièrement vert.
+- `commentaire-reedite-mention-cachee.json` — sur `changes.body.from`, à l'inverse, la
+  recherche se fait sur le texte **brut** : si l'ancienne version portait la mention dans
+  un `<!-- … -->` et la nouvelle en clair, le contenu n'a pas changé, il n'y a rien à
+  traiter (R10). Les deux règles sont opposées et c'est voulu — d'où deux fixtures.
 
 ## Harnais de test
 

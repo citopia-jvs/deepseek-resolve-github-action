@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 42,
+    "body": "`npm run build` échoue depuis la montée de version de la dépendance.\n\n@dseek peux-tu corriger ?",
+    "user": { "login": "mainteneuse" },
+    "author_association": "OWNER"
+  }
+}

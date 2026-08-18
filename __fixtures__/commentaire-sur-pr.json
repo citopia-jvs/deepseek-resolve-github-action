@@ -1,0 +1,14 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 9,
+    "user": { "login": "mainteneuse" },
+    "pull_request": {}
+  },
+  "comment": {
+    "id": 2002,
+    "body": "@dseek reprends cette pull request.",
+    "user": { "login": "mainteneuse" },
+    "author_association": "OWNER"
+  }
+}

@@ -28,11 +28,33 @@
 #                                   garde doit être fail-closed (lot 2, étage 2).
 #                                 echec
 #                                   TOUTE commande sort en GH_STUB_CODE_SORTIE.
+#                                 echec-pr-list
+#                                   ÉCHEC PARTIEL : seul `pr list` sort en
+#                                   GH_STUB_CODE_SORTIE, la permission répond
+#                                   normalement. « echec » ne suffit pas ici : il
+#                                   fait tomber la permission la première, donc la
+#                                   branche fail-closed de l'étape 7 du lot 2
+#                                   (« état indéterminé sur `gh pr list` ») est
+#                                   inatteignable et rester vert ne prouve rien.
 #
 #   GH_STUB_PERMISSION          Permission renvoyée par
 #                               `gh api repos/…/collaborators/<login>/permission`.
 #                               Défaut : « admin ». Mettre « read » ou « triage »
 #                               pour exercer le refus de l'étage 2.
+#
+#   GH_STUB_PERMISSIONS_PAR_LOGIN
+#                               Table « login=permission », séparée par des
+#                               virgules : « alice=admin,mallory=read ». Un login
+#                               absent de la table garde GH_STUB_PERMISSION, donc
+#                               aucun appel existant ne change de comportement.
+#                               La valeur spéciale « 404 » fait répondre « Not
+#                               Found » pour ce login seul.
+#                               Sans cette table, l'étage 2 bis du lot 2 n'est
+#                               exerçable qu'avec un 404, et remplacer
+#                               `!permissionSuffisante(permissionAuteur)` par
+#                               `permissionAuteur === null` reste vert : un auteur
+#                               d'issue réellement en « read » passerait pour
+#                               digne de confiance.
 #
 #   GH_STUB_LOGINS_AUTORISES    Liste de logins séparés par des virgules. Si elle
 #                               est renseignée, seuls ces logins obtiennent
@@ -109,6 +131,25 @@ if [ -n "$login" ]; then
     esac
   fi
   permission="${GH_STUB_PERMISSION:-admin}"
+
+  # Table par login. Elle l'emporte sur GH_STUB_PERMISSION pour les logins
+  # qu'elle nomme, et ne touche à rien pour les autres.
+  table="${GH_STUB_PERMISSIONS_PAR_LOGIN:-}"
+  if [ -n "$table" ]; then
+    ancien_ifs="$IFS"
+    IFS=','
+    for paire in $table; do
+      cle="${paire%%=*}"
+      valeur="${paire#*=}"
+      [ "$cle" = "$login" ] && permission="$valeur"
+    done
+    IFS="$ancien_ifs"
+  fi
+
+  # « 404 » n'est pas une permission : c'est un compte que l'API déclare inconnu.
+  # Permet de mélanger, dans une même table, un collaborateur et un non-collaborateur.
+  [ "$permission" = "404" ] && repondre_404
+
   case " $* " in
     *" --jq "*|*" -q "*) printf '%s\n' "$permission" ;;
     *) printf '{"permission":"%s","user":{"login":"%s"}}\n' "$permission" "$login" ;;
@@ -146,6 +187,13 @@ done
 # --- sous-commandes ----------------------------------------------------------
 case "${1:-} ${2:-}" in
   "pr list")
+    # Échec ISOLÉ : la permission a déjà répondu plus haut, seul ce contrôle-ci
+    # tombe. C'est le seul moyen d'atteindre la branche « état indéterminé » de
+    # l'étape 7 du lot 2.
+    if [ "$scenario" = "echec-pr-list" ]; then
+      printf 'gh-stub: « pr list » en échec simulé (scénario « echec-pr-list »)\n' >&2
+      exit "${GH_STUB_CODE_SORTIE:-1}"
+    fi
     if [ "$scenario" = "pr-ouverte" ]; then
       printf '[{"number":%s,"url":"https://github.com/%s/pull/%s","state":"OPEN"}]\n' \
         "$numero_pr" "$depot" "$numero_pr"

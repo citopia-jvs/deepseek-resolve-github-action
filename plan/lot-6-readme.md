@@ -226,6 +226,22 @@ n'est atténué.
 - **Une seule PR par issue.** Un `@dseek` sur une issue qui a déjà une PR ouverte ne fait
   rien. Une branche restée sur le remote sans PR est réutilisée.
 
+- **La garde ne filtre pas le type d'action de l'événement**, hors le cas `edited`
+  (anti-rejeu, R10). Un événement `issues` d'action `closed`, `labeled` ou `reopened`
+  dont le corps contient déjà `@dseek` relance donc un cycle complet. Le seul filtre est
+  le `types:` du workflow consommateur — c'est une raison de plus de recopier l'exemple
+  tel quel, avec ses `types: [opened]` et `types: [created]` : un `on: issues` nu
+  paierait un cycle DeepSeek à chaque changement d'étiquette. Constat remonté par
+  l'exécutant du lot 2, arbitré en gardant la garde neutre : une liste blanche de valeurs
+  `payload.action` en dur dans le script vieillirait moins bien que la déclaration du
+  workflow.
+
+- **Une branche `fix-issue-<n>` force-poussée à la main entre deux runs bloque la
+  reprise.** L'action rapatrie la branche existante sans forcer, délibérément : elle
+  échoue en non-fast-forward plutôt que d'écraser en silence le travail poussé par
+  quelqu'un d'autre. Supprimer la branche, ou fermer et rouvrir l'issue avec une
+  branche propre.
+
 - **`ubuntu-24.04` requis.** Sur un runner auto-hébergé, macOS ou Windows, `pipx` peut
   être absent ; l'action le signale explicitement.
 

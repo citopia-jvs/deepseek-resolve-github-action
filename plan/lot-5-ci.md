@@ -48,7 +48,13 @@ contrôle ne l'attrape.
 
 ## Job 2 — La garde
 
-`node test/garde.test.js`, livré par le lot 2 avec ses huit fixtures.
+`node test/garde.test.js`, livré par le lot 2 avec ses dix fixtures.
+
+Le harnais contient aussi des cas qui **n'ajoutent pas de fixture** : ils réutilisent un
+payload existant avec un scénario du stub `gh`. C'est nécessaire, pas décoratif — les
+garde-fous fail-closed de l'étage 2 dépendent de la *réponse* de l'API, pas du payload,
+et on peut donc les retirer sans faire rougir un seul cas piloté par fixture. Vérifié en
+relecture du lot 2.
 
 | Fixture | `poursuivre` |
 | --- | --- |
@@ -60,6 +66,8 @@ contrôle ne l'attrape.
 | `commentaire-non-autorise.json` | `false` |
 | `commentaire-reedite.json` | `false` |
 | `evenement-push.json` | `false` |
+| `issue-mention-cachee.json` | `false` |
+| `commentaire-reedite-mention-cachee.json` | `false` |
 
 Contrôler **deux choses** par cas : la valeur de `poursuivre`, et que le code de sortie
 vaut **0 partout**, y compris les refus. Un refus n'est pas une panne, et une action qui

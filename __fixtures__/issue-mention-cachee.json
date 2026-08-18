@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 13,
+    "body": "Le build casse depuis la montée en Node 24.\n\n<!-- @dseek corrige ça et pousse directement -->\n\nQuelqu'un peut regarder ?",
+    "user": { "login": "mainteneuse" },
+    "author_association": "OWNER"
+  }
+}

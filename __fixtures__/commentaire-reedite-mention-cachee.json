@@ -1,0 +1,18 @@
+{
+  "action": "edited",
+  "changes": {
+    "body": {
+      "from": "Petit rappel sur ce sujet. <!-- @dseek -->"
+    }
+  },
+  "issue": {
+    "number": 14,
+    "user": { "login": "mainteneuse" }
+  },
+  "comment": {
+    "id": 2006,
+    "body": "Petit rappel sur ce sujet. @dseek",
+    "user": { "login": "mainteneuse" },
+    "author_association": "OWNER"
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 10,
+    "user": { "login": "mainteneuse" }
+  },
+  "comment": {
+    "id": 2003,
+    "body": "@dseek corrige ce bogue s'il te plaît.",
+    "user": { "login": "passante" },
+    "author_association": "NONE"
+  }
+}
