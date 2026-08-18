@@ -1,0 +1,32 @@
+name: "DeepSeek Auto-Resolve Issue"
+description: "Utilise DeepSeek pour résoudre automatiquement les issues mentionnant @dseek"
+author: "Votre Nom"
+
+inputs:
+  deepseek-api-key:
+    description: "Clé API DeepSeek"
+    required: true
+  max-iterations:
+    description: "Nombre maximum d'itérations (réflexion/correction/validation)"
+    required: false
+    default: "2"
+  validation-command:
+    description: "Commande à exécuter pour valider la solution (ex: 'npm test')"
+    required: false
+    default: "npm test"
+  base-branch:
+    description: "Branche de base pour créer la PR (par défaut celle du dépôt)"
+    required: false
+    default: ""
+  github-token:
+    description: "Token GitHub avec droits d'écriture"
+    required: true
+    default: ${{ github.token }}
+
+runs:
+  using: "node16"
+  main: "src/index.js"
+
+branding:
+  icon: "cpu"
+  color: "blue"
