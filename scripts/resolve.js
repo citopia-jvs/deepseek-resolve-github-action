@@ -22,7 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { git, etatFichiers, brancheDistanteExiste } = require('./lib/git.js');
+const { git, aDesCommits, etatFichiers, brancheDistanteExiste } = require('./lib/git.js');
 const { gh } = require('./lib/gh.js');
 const { estCheminInterdit, normaliser } = require('./lib/chemins.js');
 const { nettoyerTexteTiers, masquerSecrets, tronquer } = require('./lib/texte.js');
@@ -31,7 +31,7 @@ const { nettoyerTexteTiers, masquerSecrets, tronquer } = require('./lib/texte.js
 // tout ce qui passe par `gh` ou par `git` passe par les wrappers de `lib/`, qui
 // masquent leur argv et traitent l'échec de lancement.
 //
-// Le lot 3c complète ces imports avec `aDesCommits` (contrôle R4).
+// `aDesCommits` sert au contrôle R4 du lot 3c : « ce run a-t-il commité ? ».
 
 // ---------------------------------------------------------------------------
 // Journal du job
@@ -474,7 +474,7 @@ function journaliserPreparation(preparation) {
 // ---------------------------------------------------------------------------
 // Primitives — lot 3b
 //
-// Sept fonctions aux signatures figées par `plan/contrat.md`, et AUCUNE boucle :
+// Huit fonctions aux signatures figées par `plan/contrat.md`, et AUCUNE boucle :
 // `MAX_ITERATIONS` appartient au lot 3c, qui compose ces primitives sans en
 // écrire ni en modifier une seule.
 //
@@ -482,9 +482,16 @@ function journaliserPreparation(preparation) {
 //   appelerAider(config, consigne)             -> { codeSortie, sortie }    R5 R7 R8
 //   executerValidation(config)                 -> { codeSortie, logs, premierEchec }  R7
 //   commiterTravail(message)                   -> { commite, refuses }      R2 R3 R8
+//   pousser(config, preparation, quoi)         -> void
 //   publierInitial(config, preparation, prompt) -> { numeroPr }
 //   publierTour(config, i, resultat)           -> void
 //   publierCompteRendu(config, bilan)          -> void
+//
+// `pousser` est la huitième, ajoutée en écrivant le lot 3c : le contrat n'exposait
+// que `publierInitial`, qui pousse ET ouvre la pull request, donc irrappelable au
+// tour 2. Le lot 3c a besoin d'un push après chaque commit de correction, et deux
+// copies de « push simple puis --force-with-lease, jamais --force, plus le test de
+// sansPublication » auraient fini par diverger.
 // ---------------------------------------------------------------------------
 
 // Modèle par défaut : `plan/contrat.md`. Depuis le retrait du 2026-07-24, l'API
@@ -516,6 +523,20 @@ const LONGUEUR_MAX_CORPS_ISSUE = 8000;
 const LONGUEUR_MAX_LOGS_PROMPT = 8000;
 const LONGUEUR_MAX_PREMIER_ECHEC = 200;
 const LONGUEUR_MAX_CHEMIN_AFFICHE = 200;
+
+// Borne de la `sortie` rendue par `appelerAider`. Posée ICI, à la source, et pas
+// chez l'appelant : c'est cette fonction qui sait que cette chaîne est la sortie
+// d'un sous-processus sans borne connue, et un deuxième consommateur ne doit pas
+// avoir à s'en souvenir. Sans elle, `appelerAider` masquait sa sortie mais ne la
+// bornait pas, et `publierCompteRendu` — qui insère `bilan.motif` DANS une phrase —
+// pouvait partir avec plusieurs mégaoctets dans un commentaire de PR.
+//
+// 60 000 : sous la limite d'un commentaire GitHub (65 536 caractères), donc toute
+// valeur rendue reste publiable telle quelle. Le lot 3c en extrait par ailleurs un
+// motif MONO-LIGNE de 400 caractères pour le compte rendu, et journalise la sortie
+// bornée plus court dans le job : ce ne sont pas des doublons, les trois ne servent
+// pas le même endroit. Ne pas en supprimer un en croyant à une redite.
+const LONGUEUR_MAX_SORTIE_AIDER = 60000;
 
 const MENTION = '@dseek';
 
@@ -1360,9 +1381,12 @@ function lancerAider(config, consigne) {
   // stdout ET stderr, avec le code de sortie, sans lever : c'était le défaut le
   // plus coûteux du code supprimé — un `catch` qui lisait des variables restées
   // vides. `spawnSync` remplit stdout et stderr même sur timeout.
-  const sortie = masquerSecrets(
-    retirerAnsi(`${String(resultat.stdout || '')}${String(resultat.stderr || '')}`),
-  );
+  //
+  // `tronquer` garde la tête ET la queue : la queue porte le diagnostic — la
+  // `litellm.AuthenticationError`, le « Applied edit » final —, et une troncature
+  // qui ne garderait que la tête rendrait la sortie inutile là où elle sert.
+  const brut = `${String(resultat.stdout || '')}${String(resultat.stderr || '')}`;
+  const sortie = tronquer(masquerSecrets(retirerAnsi(brut)), LONGUEUR_MAX_SORTIE_AIDER);
 
   if (resultat.error && resultat.error.code === 'ETIMEDOUT') {
     avertir(
@@ -1943,6 +1967,58 @@ function numeroPrOuverte(config) {
 }
 
 /**
+ * Pousse la branche de travail sur `origin` — huitième primitive du lot 3b.
+ *
+ * Un seul endroit sait pousser, et c'est voulu : `publierInitial` l'appelle pour le
+ * premier commit, le lot 3c pour chaque commit de correction. Deux copies de la
+ * même logique — push simple, puis `--force-with-lease` en recours, jamais
+ * `--force` — n'auraient été corrigées qu'à moitié le jour où elle change.
+ *
+ * Un push simple d'abord : `--force-with-lease` n'est qu'un recours pour le
+ * non-fast-forward qui subsiste malgré la reprise de branche du lot 3a (R9).
+ * Jamais `--force`, qui écraserait un commit humain poussé entre-temps.
+ *
+ * Lève si le recours échoue lui aussi : un travail commité que personne ne verra
+ * est une panne, pas un résultat — le lot 3c en fait un code de sortie non nul.
+ *
+ * Ne journalise JAMAIS `preparation.prefixeAuthentification` : il porte le jeton
+ * dans son argv. `lib/git.js` masque de son côté l'argv de ses messages d'erreur.
+ *
+ * @param {Readonly<object>} config
+ * @param {Readonly<object>} preparation objet rendu par `preparer()` (lot 3a)
+ * @param {string} quoi libellé court de ce qui est poussé, pour le journal du job
+ *   (« le premier commit », « la correction du tour 2 ») : sans lui, trois lignes
+ *   de log identiques ne se distinguent pas
+ */
+function pousser(config, preparation, quoi) {
+  if (config.sansPublication) {
+    journaliser(`no-publish : aucun push (${quoi}).`);
+    return;
+  }
+  exigerJetonGh(config, `le push de ${preparation.branche}`);
+
+  const argumentsPush = [
+    ...preparation.prefixeAuthentification,
+    'push',
+    // Reposé à chaque appel, ce qui est sans effet après le premier : le coût est
+    // nul et un checkout inspecté à la main garde une branche suivie.
+    '--set-upstream',
+    'origin',
+    `${preparation.branche}:refs/heads/${preparation.branche}`,
+  ];
+  if (git(argumentsPush, { tolererEchec: true }) === null) {
+    avertir(
+      `Le push de ${preparation.branche} a été refusé : nouvelle tentative avec ` +
+        '--force-with-lease (la branche a bougé côté distant depuis le fetch).',
+    );
+    const avecBail = [...argumentsPush];
+    avecBail.splice(avecBail.indexOf('push') + 1, 0, '--force-with-lease');
+    git(avecBail);
+  }
+  journaliser(`Poussé sur origin/${preparation.branche} : ${quoi}.`);
+}
+
+/**
  * Pousse la branche et ouvre la pull request.
  *
  * Appelée par le lot 3c juste après le premier commit, avant la première
@@ -1963,25 +2039,8 @@ function publierInitial(config, preparation, prompt) {
   }
   exigerJetonGh(config, "le push de la branche et l'ouverture de la pull request");
 
-  // Push. Un push simple d'abord : `--force-with-lease` n'est qu'un recours pour
-  // le non-fast-forward qui subsiste malgré la reprise de branche du lot 3a
-  // (R9). Jamais `--force`, qui écraserait un commit humain poussé entre-temps.
-  const argumentsPush = [
-    ...preparation.prefixeAuthentification,
-    'push',
-    '--set-upstream',
-    'origin',
-    `${preparation.branche}:refs/heads/${preparation.branche}`,
-  ];
-  if (git(argumentsPush, { tolererEchec: true }) === null) {
-    avertir(
-      `Le push de ${preparation.branche} a été refusé : nouvelle tentative avec ` +
-        '--force-with-lease (la branche a bougé côté distant depuis le fetch).',
-    );
-    const avecBail = [...argumentsPush];
-    avecBail.splice(avecBail.indexOf('push') + 1, 0, '--force-with-lease');
-    git(avecBail);
-  }
+  // Le push est délégué à `pousser` : une seule logique de push dans le fichier.
+  pousser(config, preparation, 'le premier commit');
 
   // Corps de la PR. Le corps de l'issue n'y est JAMAIS recopié : un lien suffit.
   // Recopier, c'est rendre du markdown tiers — image de suivi qui désanonymise
@@ -2177,6 +2236,8 @@ function publierTour(config, i, resultat) {
  * @param {{ succes: boolean, iterations: number, maxIterations: number,
  *           motif: string, refuses: string[], numeroPr: number|null }} bilan
  */
+const MARQUEUR_COMPTE_RENDU = '<!-- deepseek-resolve:compte-rendu -->';
+
 function publierCompteRendu(config, bilan) {
   const lignes = [];
   if (bilan.succes) {
@@ -2184,16 +2245,32 @@ function publierCompteRendu(config, bilan) {
       `🎉 Succès ! L'issue #${config.numeroIssue} a été résolue en ${bilan.iterations} ` +
         'itération(s). La PR est prête pour révision.',
     );
-  } else {
+  } else if (bilan.iterations === 0) {
+    // Chemin R4 et échec technique : la boucle n'a jamais tourné. Annoncer
+    // « Échec après 2 itérations » puis « Itérations effectuées : 0 » se lit mal et
+    // fait chercher au mauvais endroit — c'est le motif qui explique l'échec, pas un
+    // compte de tours. Relevé en écrivant le lot 3c, tranché dans `plan/contrat.md`
+    // sous l'objet `bilan`.
+    lignes.push(`❌ Échec. Cause : ${bilan.motif || 'indéterminée'}.`);
+  } else if (bilan.iterations === bilan.maxIterations) {
+    // Formulation GELÉE par le plan, reprise telle quelle du code supprimé : c'est
+    // ce que les utilisateurs de la version précédente reconnaissent. Elle ne vaut
+    // que quand la boucle est allée au bout — c'est le seul cas où « après <max>
+    // itérations » est exact.
     lignes.push(
-      `❌ Échec après ${bilan.maxIterations} itérations. Cause : ${
+      `❌ Échec après ${bilan.maxIterations} itération(s). Cause : ${
         bilan.motif || 'indéterminée'
       }.`,
     );
-    if (bilan.iterations !== bilan.maxIterations) {
-      lignes.push('');
-      lignes.push(`Itérations effectuées : ${bilan.iterations}.`);
-    }
+  } else {
+    // Arrêt avant la borne : un tour sans commit, un échec technique en cours de
+    // boucle. Une seule phrase qui dit les deux nombres, plutôt que la phrase gelée
+    // suivie d'un « Itérations effectuées : 1 » qui la contredit — le lecteur ne
+    // saurait pas lequel des deux comptes croire.
+    lignes.push(
+      `❌ Échec après ${bilan.iterations} itération(s) sur ${bilan.maxIterations} ` +
+        `autorisée(s). Cause : ${bilan.motif || 'indéterminée'}.`,
+    );
   }
 
   // Si des chemins ont été refusés, le dire : sinon l'utilisateur cherche
@@ -2212,12 +2289,28 @@ function publierCompteRendu(config, bilan) {
     );
   }
 
+  // Marqueur stable de fin de compte rendu. Il sert à `rendre-compte.js` (lot 4),
+  // qui publie le compte rendu quand le job meurt avant d'arriver ici, et qui ne
+  // doit rien republier sinon. Reconnaître un compte rendu à son emoji serait
+  // fragile ; un commentaire HTML est invisible dans le rendu GitHub, et c'est NOUS
+  // qui l'écrivons — ce n'est pas du texte tiers, donc `nettoyerTexteTiers` n'a
+  // rien à y voir. Figé dans `plan/contrat.md`.
+  lignes.push('');
+  lignes.push(MARQUEUR_COMPTE_RENDU);
+
   const corps = lignes.join('\n');
 
   if (config.sansPublication) {
     journaliser(`no-publish : compte rendu non publié.\n${corps}`);
     return;
   }
+  // Journalisé AVANT tout le reste, `exigerJetonGh` COMPRIS : c'est le dernier
+  // message que l'utilisateur reçoit, et il ne doit dépendre de rien — ni d'un
+  // jeton, ni d'un appel réseau, ni de l'inscriptibilité de TMPDIR. Mesuré : avec
+  // un GH_TOKEN vide, `exigerJetonGh` levait avant cette ligne et le compte rendu
+  // n'existait alors nulle part, pas même dans les logs du job.
+  journaliser(corps);
+
   exigerJetonGh(config, 'la publication du compte rendu');
 
   // Sans pull request, le compte rendu va sur l'issue : c'est le chemin R4
@@ -2226,11 +2319,6 @@ function publierCompteRendu(config, bilan) {
     bilan.numeroPr === null
       ? ['issue', 'comment', String(config.numeroIssue)]
       : ['pr', 'comment', String(bilan.numeroPr)];
-
-  // Journalisé AVANT la tentative de publication : c'est le dernier message que
-  // l'utilisateur reçoit, et il ne doit pas dépendre de la réussite d'un appel
-  // réseau ni de l'inscriptibilité de TMPDIR.
-  journaliser(corps);
 
   const ou = bilan.numeroPr === null ? `l'issue #${config.numeroIssue}` : `la PR #${bilan.numeroPr}`;
   let reponse = null;
@@ -2253,35 +2341,714 @@ function publierCompteRendu(config, bilan) {
 // ---------------------------------------------------------------------------
 // Orchestration — lot 3c
 //
-// À écrire ici : la boucle qui compose les six primitives ci-dessus sans en
-// écrire aucune ni en modifier la signature. Y vivent R4 (`aDesCommits`), le
-// contrôle du code de sortie d'aider, le contrôle de ceinture avant push, le
-// mode `no-publish`, les `::group::` par itération et l'écriture des outputs
-// `numero-pr`, `iterations`, `succes` dans `GITHUB_OUTPUT`.
+// La boucle, qui COMPOSE les sept primitives ci-dessus sans en écrire aucune ni
+// en modifier la signature. Y vivent R4 (`aDesCommits`), le contrôle du code de
+// sortie d'aider, le contrôle de ceinture avant push, les `::group::` par
+// itération et l'écriture des sorties `numero-pr`, `iterations`, `succes` dans
+// `GITHUB_OUTPUT`.
 //
-// Déjà en place et réutilisable :
-//   • `preparation.shaDepart` : la base du contrôle R4, `aDesCommits(shaDepart)`.
-//     C'est CE run qui est mesuré, pas la branche : quand `reprise` vaut
-//     `'distante'`, la branche porte déjà les commits d'un run précédent.
-//   • `preparation.shaBase` : la base du diff de la PR et du contrôle de ceinture
-//     `git log --name-only <shaBase>..HEAD`. Ne pas recalculer depuis HEAD.
-//     Les deux SHA et leur partage des rôles sont figés dans `plan/contrat.md`,
-//     section « Objet `preparation` rendu par `preparer()` ».
-//   • `config.sansPublication` : booléen, déjà comparé à `'true'` une seule fois.
-//   • `config.maxIterations` : chaîne brute, à interpréter ici.
+// Ce que ce lot NE fait pas, et pourquoi :
+//
+//   • il ne rédige aucun texte destiné au modèle : `construireConsigne` porte
+//     toutes les règles de R6 ;
+//   • il ne masque ni ne tronque les logs de validation : `executerValidation`
+//     rend des `logs` déjà masqués et `construireConsigne` tronque `logsEchec`
+//     lui-même. Les refaire ici donnerait deux vérités sur la même donnée ;
+//   • il ne lit `v.logs` que pour le passer à `construireConsigne`. Seuls
+//     `codeSortie` et `premierEchec` sont publiables — c'est la raison d'être du
+//     troisième champ rendu par `executerValidation` ;
+//   • il n'ajoute pas de garde `no-publish` par-dessus les primitives, qui
+//     l'honorent déjà chacune (relu : `pousser`, `publierInitial`, `publierTour` et
+//     `publierCompteRendu` testent `config.sansPublication` en tête). Un second
+//     garde-fou masquerait un trou dans le premier — et le push des commits de
+//     correction passe désormais par la primitive `pousser`, pas par un pousseur
+//     interne à ce lot.
+//
+// Deux points de référence, deux questions, et il ne faut pas les confondre :
+// `preparation.shaDepart` répond à « CE run a-t-il produit quelque chose ? »,
+// c'est le seul bon compteur pour R4 — sur une branche reprise (R9),
+// `shaBase..HEAD` est déjà non nul avant le premier appel à aider.
+// `preparation.shaBase` répond à « qu'est-ce que cette PR ajoute à la base ? »,
+// c'est la référence du diff de PR et du contrôle de ceinture, parce que le push
+// pousse toute la branche.
 // ---------------------------------------------------------------------------
 
+// Défaut de l'input `max-iterations` (`plan/contrat.md`) et plafond.
+//
+// Le plafond n'est pas décoratif : une itération vaut un appel à aider PLUS une
+// exécution de la commande de validation, donc du crédit DeepSeek et des minutes
+// de runner. Un `max-iterations: "9999"` recopié d'un exemple ferait tourner le
+// job jusqu'au `timeout-minutes` du consommateur, en payant chaque tour.
+const MAX_ITERATIONS_PAR_DEFAUT = 2;
+const MAX_ITERATIONS_PLAFOND = 20;
+
+// Trois issues, deux codes : `plan/contrat.md`, « Code de sortie du processus ».
+// Un RÉSULTAT sort en 0 — validation encore rouge après `max-iterations`, aider
+// qui ne commite rien (R4) ; une PANNE sort en non nul — code non nul d'aider,
+// opération d'infrastructure en échec. Rougir sur un résultat mettrait une croix
+// rouge sur le dépôt à chaque issue difficile, et apprendrait à l'équipe à
+// ignorer la croix.
+const CODE_RESULTAT = 0;
+const CODE_PANNE = 1;
+
+// `publierCompteRendu` insère `bilan.motif` DANS une phrase de commentaire : il
+// est donc ramené sur une ligne et borné ici, à la source.
+const LONGUEUR_MAX_MOTIF = 400;
+
+// Ce qui part dans le journal du job pour un appel à aider. `appelerAider`
+// CAPTURE stdout et stderr (`spawnSync` sans `stdio: 'inherit'`) : sans cette
+// écriture, rien de ce qu'aider dit n'atteindrait les logs du job, et un échec
+// technique serait indiagnosticable. La sortie est déjà masquée ET bornée par
+// `appelerAider` (60 000 caractères) ; on resserre pour le journal, où 60 Ko par
+// appel noieraient tout le reste. Ce n'est pas une redite de la borne de la
+// primitive : celle-là garantit qu'une valeur rendue est publiable, celle-ci
+// garantit qu'un log reste lisible.
+const LONGUEUR_MAX_SORTIE_AIDER_JOURNALISEE = 20000;
+
+// Nombre de chemins nommés dans le message du contrôle de ceinture : le message
+// doit rester lisible dans une annotation de job.
+const MAX_CHEMINS_CEINTURE_AFFICHES = 20;
+
 /**
- * Point d'entrée de la boucle. Remplacé par le lot 3c.
+ * Interprète `MAX_ITERATIONS`, qui arrive en CHAÎNE BRUTE comme tout input.
+ *
+ * Même traitement que `MAP_TOKENS`, `MODELE` et `MINUTES_MAX_APPEL_AIDER` : une
+ * valeur absente vaut le défaut sans bruit — c'est le cas nominal hors runner —,
+ * une valeur ILLISIBLE est signalée nominativement. La corriger en silence
+ * laisserait croire à l'auteur du workflow que sa valeur est appliquée.
+ *
+ * @param {Readonly<object>} config
+ * @returns {number} entier >= 1
+ */
+function nombreMaxIterations(config) {
+  const brut = config.maxIterations;
+  if (brut === '') return MAX_ITERATIONS_PAR_DEFAUT;
+
+  const valeur = Number(brut);
+  if (!/^\d+$/.test(brut) || valeur < 1 || valeur > MAX_ITERATIONS_PLAFOND) {
+    avertir(
+      `MAX_ITERATIONS illisible : ${JSON.stringify(brut)}. Attendu un entier entre 1 et ` +
+        `${MAX_ITERATIONS_PLAFOND} (une itération = un appel à aider et une exécution de la ` +
+        `commande de validation). Valeur retenue : ${MAX_ITERATIONS_PAR_DEFAUT}.`,
+    );
+    return MAX_ITERATIONS_PAR_DEFAUT;
+  }
+  return valeur;
+}
+
+// `::group::` et `::endgroup::` sont des commandes de workflow, donc mono-ligne.
+// Elles passent par `journaliser`, comme tout le reste : le titre porte le numéro
+// d'itération, mais rien n'interdit qu'il porte un jour du texte tiers.
+function ouvrirGroupe(titre) {
+  journaliser(`::group::${surUneLigne(titre)}`);
+}
+
+// Toujours appelée depuis un `finally`. Un groupe laissé ouvert par une exception
+// avale TOUT le reste des logs du job dans un bloc replié, compte rendu final
+// compris.
+function fermerGroupe() {
+  journaliser('::endgroup::');
+}
+
+// ─── Sorties de l'action ─────────────────────────────────────────────────────
+
+// Vrai dès que le bloc est parti. `ecrireSortiesResolve` est appelée depuis un
+// `finally` : sans ce drapeau, un chemin qui l'appellerait deux fois écrirait deux
+// blocs, et le consommateur lirait la dernière valeur — pas forcément la bonne.
+let sortiesResolveEcrites = false;
+
+/**
+ * Écrit `numero-pr`, `iterations` et `succes` dans `GITHUB_OUTPUT`.
+ *
+ * Sur TOUS les chemins de sortie, refus compris, même règle que la garde et pour
+ * la même raison : un consommateur qui lit une sortie absente reçoit `''`, et
+ * `'' !== 'false'`.
+ *
+ * Aucune des trois valeurs ne porte de texte tiers — un entier, un entier, un
+ * booléen —, donc pas de bloc à délimiteur ici, contrairement au `motif` de la
+ * garde : il n'y a rien à injecter.
+ *
+ * @param {{ numeroPr: number|null, iterations: number, succes: boolean }} etat
+ */
+function ecrireSortiesResolve(etat) {
+  if (sortiesResolveEcrites) return;
+  // Posé AVANT l'écriture : une écriture qui échoue ne doit pas être rejouée, elle
+  // rejouerait la même erreur de système de fichiers.
+  sortiesResolveEcrites = true;
+
+  const bloc =
+    [
+      // Vide quand aucune PR n'a été ouverte : chemin R4, panne avant le push,
+      // ou `no-publish`.
+      `numero-pr=${Number.isInteger(etat.numeroPr) ? String(etat.numeroPr) : ''}`,
+      `iterations=${Number.isInteger(etat.iterations) ? String(etat.iterations) : '0'}`,
+      `succes=${etat.succes ? 'true' : 'false'}`,
+    ].join('\n') + '\n';
+
+  const fichier = process.env.GITHUB_OUTPUT;
+  if (!fichier) {
+    // Hors runner — c'est le cas NORMAL en test et à la main. Pas une erreur.
+    journaliser(`GITHUB_OUTPUT absente, sorties non écrites :\n${bloc}`);
+    return;
+  }
+
+  // Écriture DANS un `try`, et c'est le défaut bloquant qu'a eu le lot 2 : la
+  // variable peut pointer un répertoire (EISDIR), un parent inexistant (ENOENT),
+  // un fichier sans droits (EACCES). Laisser filer l'exception ferait mourir le
+  // job sur la plomberie des sorties, en écrasant le verdict réel de la boucle.
+  // `::error::` annote le résumé sans changer le code de sortie.
+  try {
+    fs.appendFileSync(fichier, bloc);
+  } catch (err) {
+    erreur(
+      `Écriture de GITHUB_OUTPUT (${fichier}) impossible : ` +
+        `${err && err.message ? err.message : err}. Les sorties numero-pr, iterations et ` +
+        "succes sont perdues : un consommateur qui les lit recevra des chaînes vides.",
+    );
+    journaliser(`Sorties qui n'ont pas pu être écrites :\n${bloc}`);
+  }
+}
+
+// ─── Outils de la boucle ─────────────────────────────────────────────────────
+
+/**
+ * Cumule les chemins refusés, dédupliqués — c'est ce que `bilan.refuses` attend.
+ * @param {{ refuses: string[] }} etat
+ * @param {string[]} refuses
+ */
+function cumulerRefuses(etat, refuses) {
+  if (!Array.isArray(refuses)) return;
+  for (const chemin of refuses) {
+    if (!etat.refuses.includes(chemin)) etat.refuses.push(chemin);
+  }
+}
+
+/**
+ * Journalise un appel à aider : son code de sortie, puis sa sortie bornée.
+ *
+ * Sans ceci, la sortie d'aider n'existe nulle part : `appelerAider` la capture et
+ * la rend, personne ne l'écrit. Elle est déjà masquée (R7).
+ *
+ * @param {number} numero numéro de l'appel, à partir de 1
+ * @param {{ codeSortie: number, sortie: string }} resultat
+ */
+function journaliserAppelAider(numero, resultat) {
+  journaliser(`aider — appel ${numero} : code de sortie ${resultat.codeSortie}.`);
+  const sortie = String(resultat.sortie || '').trim();
+  if (sortie !== '') {
+    journaliser(tronquer(sortie, LONGUEUR_MAX_SORTIE_AIDER_JOURNALISEE));
+  }
+}
+
+/**
+ * Rend un texte insérable dans la phrase « Cause : … » du compte rendu.
+ *
+ * Trois traitements, et aucun n'est décoratif : le texte peut être un message
+ * d'erreur de git ou de `gh` qui recopie un chemin CHOISI PAR LE MODÈLE (donc du
+ * texte tiers), il part dans un commentaire où le markdown est interprété, et
+ * `publierCompteRendu` l'insère au milieu d'une phrase — un retour à la ligne y
+ * couperait la phrase en deux et la suite serait rendue comme du markdown.
+ *
+ * @param {string} texte
+ * @returns {string}
+ */
+function motifPubliable(texte) {
+  return raccourcirUneLigne(
+    masquerSecrets(nettoyerTexteTiers(String(texte))).replace(/[`|<>]/g, ' '),
+    LONGUEUR_MAX_MOTIF,
+  );
+}
+
+/**
+ * Extrait de la sortie d'aider ce qui peut servir de motif dans le compte rendu.
+ *
+ * Les dernières lignes non vides : c'est là qu'aider met son diagnostic — une
+ * `litellm.AuthenticationError`, un « Aucune modification nécessaire ». Ramené sur
+ * UNE ligne et borné court parce que `publierCompteRendu` insère `motif` DANS une
+ * phrase de commentaire : la borne de 60 000 caractères d'`appelerAider` rend la
+ * sortie publiable, elle ne la rend pas insérable dans une phrase. Nettoyé comme
+ * tout texte tiers — c'est un modèle qui l'a écrit, à partir d'une demande que
+ * personne n'a authentifiée — et débarrassé des caractères qui rouvriraient le
+ * markdown du commentaire.
+ *
+ * @param {string} sortie
+ * @returns {string} chaîne vide si aider n'a rien dit
+ */
+function extraitSortieAider(sortie) {
+  const lignes = String(sortie || '')
+    .split(/\r?\n/)
+    .map((ligne) => ligne.trim())
+    .filter((ligne) => ligne !== '');
+  if (lignes.length === 0) return '';
+  return motifPubliable(lignes.slice(-3).join(' · '));
+}
+
+/**
+ * Suffixe de motif qui cite la queue de la sortie d'aider, ÉTIQUETÉE pour ce
+ * qu'elle est.
+ *
+ * `appelerAider` fusionne stdout et stderr : la queue est donc celle de stderr, qui
+ * n'est pas forcément le dernier mot d'aider. Mesuré sur le chemin R4 — la
+ * conclusion (« Aucune modification nécessaire ») est sur stdout, donc au milieu de
+ * la chaîne, et la queue cite des avertissements. L'annoncer « dernier message
+ * d'aider » serait donc faux, et un motif faux fait chercher au mauvais endroit.
+ * Une phrase honnête vaut mieux qu'une extraction plus fine et fragile.
+ *
+ * @param {string} sortie
+ * @returns {string} chaîne vide si aider n'a rien dit
+ */
+function citationSortieAider(sortie) {
+  const extrait = extraitSortieAider(sortie);
+  if (extrait === '') return '';
+  return ` Dernières lignes de la sortie d'aider (stdout et stderr mêlés) : ${extrait}`;
+}
+
+/**
+ * Contrôle de ceinture avant tout push : quels chemins interdits sont nommés par
+ * les commits de `<reference>..HEAD` ?
+ *
+ * `commiterTravail` garantit déjà qu'aucun n'a été stagé ; ce contrôle attrape une
+ * régression, ou un chemin qui aurait échappé à la normalisation. Il vaut la
+ * peine : un push refusé pour cause de `workflows` coûte TOUTES les itérations et
+ * l'argent déjà dépensé, et le message serveur ne dit pas quoi corriger.
+ *
+ * `-z` avec `--format=` : la sortie est alors une suite de chemins séparés par des
+ * NUL, sans en-tête de commit. Sans lui, git cite et échappe les chemins qui
+ * contiennent une espace ou un caractère non ASCII, et le contrôle porterait sur
+ * un nom qui n'est pas celui du fichier.
+ *
+ * @param {string} reference SHA de base — `preparation.shaBase`
+ * @returns {string[]} chemins interdits, dédupliqués. Vide = rien à signaler
+ */
+function cheminsInterditsDansCommits(reference) {
+  const sortie = git(['log', '--name-only', '--format=', '-z', `${reference}..HEAD`, '--'], {
+    tolererEchec: true,
+  });
+  if (typeof sortie !== 'string') {
+    // Fail-open ASSUMÉ, et c'est le bon sens de la faute ici : le contrôle
+    // primaire est `commiterTravail`, celui-ci n'est qu'une ceinture. Refuser de
+    // pousser parce que `git log` n'a pas répondu ferait perdre un run entier pour
+    // une panne de diagnostic, alors que le push, lui, dirait la vérité.
+    avertir(
+      `Le contrôle de ceinture avant push n'a pas pu être fait : « git log --name-only ` +
+        `${reference}..HEAD » a échoué. Le push est tenté quand même — le refus serveur ` +
+        'reste le filet.',
+    );
+    return [];
+  }
+
+  const interdits = [];
+  for (const chemin of sortie.split(String.fromCharCode(0))) {
+    if (chemin === '') continue;
+    if (!estCheminInterdit(chemin)) continue;
+    if (!interdits.includes(chemin)) interdits.push(chemin);
+  }
+  return interdits;
+}
+
+/**
+ * Refuse le push si un chemin interdit est entré dans un commit.
+ *
+ * Message exploitable : quels chemins, d'où ils viennent, quoi faire. Un refus muet
+ * ferait chercher au mauvais endroit — et un refus qui accuse la mauvaise cause est
+ * pire encore.
+ *
+ * D'où la double interrogation : `shaBase..HEAD` reste la plage qui compte, parce
+ * que c'est toute la branche que le push envoie, mais `shaDepart..HEAD` dit lesquels
+ * de ces chemins viennent de CE run. Mesuré : sur une branche reprise (R9) portant
+ * déjà un `.github/workflows/ci.yml` d'un run précédent, `commiterTravail` n'a rien
+ * filtré de travers, et lui imputer la faute envoyait le lecteur relire le mauvais
+ * code.
+ *
+ * @param {Readonly<object>} preparation objet rendu par `preparer()` (lot 3a)
+ * @returns {string} motif de refus, chaîne vide si tout va bien
+ */
+function motifRefusCeinture(preparation) {
+  const interdits = cheminsInterditsDansCommits(preparation.shaBase);
+  if (interdits.length === 0) return '';
+
+  // Deuxième interrogation, seulement quand il y a quelque chose à expliquer.
+  const deCeRun = cheminsInterditsDansCommits(preparation.shaDepart);
+
+  const nommes = interdits
+    .slice(0, MAX_CHEMINS_CEINTURE_AFFICHES)
+    .map((chemin) => cheminAffichable(chemin))
+    .join(', ');
+  const reste =
+    interdits.length > MAX_CHEMINS_CEINTURE_AFFICHES
+      ? ` et ${interdits.length - MAX_CHEMINS_CEINTURE_AFFICHES} autre(s)`
+      : '';
+
+  const origine =
+    deCeRun.length === 0
+      ? "Aucun ne vient de ce run : ils étaient déjà sur la branche de travail, reprise " +
+        "telle quelle (R9), avant notre premier commit. Le filtrage de commiterTravail n'est " +
+        'donc pas en cause — la branche doit être corrigée ou supprimée à la main avant de ' +
+        'relancer.'
+      : `${deCeRun.length} d'entre eux ont été commités par ce run : c'est une régression du ` +
+        "filtrage de commiterTravail, à corriger dans l'action.";
+
+  return (
+    `${interdits.length} chemin(s) interdit(s) figurent dans les commits de cette branche : ` +
+    `${nommes}${reste}. Rien n'est poussé — le push serait de toute façon refusé par le ` +
+    `serveur pour les fichiers de workflow (R3). ${origine}`
+  );
+}
+
+/**
+ * Publie le compte rendu final sans jamais lever.
+ *
+ * Appelée sur tous les chemins, y compris après une panne dont la cause est
+ * justement l'absence de jeton — auquel cas `publierCompteRendu` lève par
+ * `exigerJetonGh`. Le compte rendu est le dernier message que l'utilisateur
+ * reçoit : il ne doit pas se transformer en seconde panne qui masque la première.
+ * `publierCompteRendu` journalise le corps AVANT `exigerJetonGh` et avant tout appel
+ * réseau — ne pas réinverser cet ordre : rien n'est alors perdu, le compte rendu
+ * reste dans les logs du job même quand il ne peut pas être publié.
+ *
+ * @param {Readonly<object>} config
+ * @param {object} bilan
+ */
+function tenterCompteRendu(config, bilan) {
+  try {
+    publierCompteRendu(config, bilan);
+  } catch (err) {
+    avertir(
+      `Le compte rendu final n'a pas pu être publié : ${err && err.message ? err.message : err}`,
+    );
+  }
+}
+
+/**
+ * Retire le point final d'un motif.
+ *
+ * `publierCompteRendu` écrit « Cause : <motif>. » : un motif qui porte déjà son
+ * point affiche « … (R3).. » dans le compte rendu. Les motifs restent ponctués
+ * pour l'annotation de job, qui est une phrase à elle seule.
+ *
+ * @param {string} motif
+ * @returns {string}
+ */
+function sansPointFinal(motif) {
+  return String(motif).replace(/[\s.]+$/, '');
+}
+
+/**
+ * Annonce le verdict dans le résumé du job, au bon niveau.
+ *
+ * `::error::` pour ce que le relecteur doit voir sans dérouler les logs — panne
+ * technique, `max-iterations` atteint (`plan/contrat.md` le demande explicitement,
+ * tout en sortant en 0) —, `::warning::` pour un résultat qui n'accuse personne :
+ * R4, aucun commit produit à un tour de correction.
+ *
+ * @param {{ succes: boolean, motif: string, niveau: 'succes'|'avertissement'|'erreur' }} verdict
+ */
+function annoncerVerdict(verdict) {
+  if (verdict.niveau === 'erreur') erreur(verdict.motif);
+  else if (verdict.niveau === 'avertissement') avertir(verdict.motif);
+  else journaliser(verdict.motif);
+}
+
+// ─── La boucle ───────────────────────────────────────────────────────────────
+
+/**
+ * Déroule la séquence complète et rend un verdict.
+ *
+ * Le décompte des appels est le point sur lequel une erreur de borne se cache. Avec
+ * `MAX_ITERATIONS = 2` et une validation toujours rouge :
+ *
+ *   | consigne initiale | aider nº 1                                             |
+ *   | tour 1            | validation nº 1 → rouge, donc aider nº 2 (correction)  |
+ *   | tour 2            | validation nº 2 → rouge, et `i == MAX_ITERATIONS` :    |
+ *   |                   | on sort SANS relancer aider                            |
+ *
+ * Deux tours, deux validations, DEUX appels d'aider. Le dernier tour ne relance
+ * jamais aider : cela produirait un commit que rien ne valide ensuite, ce qui est
+ * pire que rien.
+ *
  * @param {Readonly<object>} config
  * @param {Readonly<object>} preparation
+ * @param {{ numeroPr: number|null, iterations: number, succes: boolean,
+ *           refuses: string[], maxIterations: number }} etat muté au fil de la
+ *   séquence, pour que les sorties de l'action et le compte rendu reflètent l'état
+ *   réel même si une primitive lève
+ * @returns {{ succes: boolean, motif: string, code: number,
+ *             niveau: 'succes'|'avertissement'|'erreur' }}
+ */
+function executerSequence(config, preparation, etat) {
+  const maxIterations = etat.maxIterations;
+  let appelsAider = 0;
+
+  // ─── Amont : une consigne, un appel, un commit ──────────────────────────────
+  const consigne = construireConsigne(config);
+
+  ouvrirGroupe('Appel initial à aider');
+  let resultatAider;
+  try {
+    appelsAider += 1;
+    resultatAider = appelerAider(config, consigne);
+    journaliserAppelAider(appelsAider, resultatAider);
+  } finally {
+    fermerGroupe();
+  }
+
+  // Le code de sortie d'aider est FATAL, et c'est le contrôle qui manquait le plus
+  // à la version supprimée : clé refusée (401), crédit épuisé (402), quota, modèle
+  // rejeté, plantage Python. Sans lui, la boucle enchaîne sur la validation,
+  // échoue, relance aider qui replante, consomme `max-iterations`, puis rapporte
+  // « aucune modification proposée » — diagnostic FAUX sur le mode de panne le plus
+  // probable en production.
+  if (resultatAider.codeSortie !== 0) {
+    return verdictEchecTechniqueAider(appelsAider, resultatAider);
+  }
+
+  let commit = commiterTravail(`Résolution de l'issue #${config.numeroIssue}`);
+  cumulerRefuses(etat, commit.refuses);
+
+  // R4 — sur `shaDepart`, JAMAIS sur `shaBase` : sur une branche reprise (R9),
+  // `shaBase..HEAD` est déjà non nul avant le premier appel à aider, et le
+  // contrôle ne détecterait plus rien.
+  if (!aDesCommits(preparation.shaDepart)) {
+    return {
+      succes: false,
+      // Résultat, pas panne : le modèle a estimé qu'il n'y avait rien à faire, il
+      // a refusé, ou toutes ses éditions ont échoué. Sans PR, le compte rendu part
+      // sur l'issue — et en `no-publish`, `publierCompteRendu` se contente de le
+      // journaliser, ce qui est exactement le cas particulier « R4 + no-publish ».
+      motif:
+        "aider n'a produit aucune modification commitable : aucune pull request n'est ouverte." +
+        citationSortieAider(resultatAider.sortie),
+      code: CODE_RESULTAT,
+      niveau: 'avertissement',
+    };
+  }
+
+  // Contrôle de ceinture, OBLIGATOIRE avant tout push.
+  const refusCeinture = motifRefusCeinture(preparation);
+  if (refusCeinture !== '') {
+    return { succes: false, motif: refusCeinture, code: CODE_PANNE, niveau: 'erreur' };
+  }
+
+  // Push et `gh pr create` JUSTE APRÈS le premier commit, avant la première
+  // validation : si le job est annulé ou tué par le `timeout-minutes` du
+  // consommateur, le travail déjà fait est visible dans une PR au lieu d'être
+  // perdu. `publierInitial` ne pousse ni n'ouvre rien en `no-publish`.
+  etat.numeroPr = publierInitial(config, preparation, consigne).numeroPr;
+
+  // Hors `no-publish`, un numéro absent est une PANNE, pas un détail cosmétique.
+  // Mesuré avec un `gh` en échec sur toutes ses sous-commandes : aucune PR ouverte,
+  // aucun commentaire publié, et la boucle rendait quand même `succes=true` et le
+  // code 0 — un job vert pour un travail que personne ne verra jamais. Le contrat
+  // range l'échec d'une opération d'infrastructure du côté du code non nul.
+  //
+  // Pas de faux rouge : `publierInitial` retrouve le numéro d'une PR déjà ouverte
+  // sur la branche (`gh pr list --head`), donc le cas « la PR existait déjà » rend
+  // bien un numéro et passe ici sans encombre. En `no-publish`, le numéro est
+  // toujours `null` et c'est le comportement attendu.
+  if (!config.sansPublication && etat.numeroPr === null) {
+    return {
+      succes: false,
+      motif:
+        "la pull request n'a pas pu être ouverte : « gh pr create » n'a rendu aucun numéro et " +
+        "aucune pull request ouverte n'a été retrouvée sur la branche. Les commits sont " +
+        `poussés sur ${preparation.branche}, rien n'est perdu ; il reste à ouvrir la pull ` +
+        "request. Vérifier les droits du jeton (pull-requests: write) et l'état du service.",
+      code: CODE_PANNE,
+      niveau: 'erreur',
+    };
+  }
+
+  // ─── Les tours ─────────────────────────────────────────────────────────────
+  let verdict = null;
+  for (let i = 1; i <= maxIterations; i += 1) {
+    const derniereIteration = i === maxIterations;
+    ouvrirGroupe(`Itération ${i} sur ${maxIterations}`);
+    try {
+      const validation = executerValidation(config);
+      // Compté APRÈS le retour : un tour dont la validation lève n'a pas eu lieu.
+      etat.iterations = i;
+
+      publierTour(config, i, {
+        validationOk: validation.codeSortie === 0,
+        codeSortieValidation: validation.codeSortie,
+        premierEchec: validation.premierEchec,
+        // Les chemins refusés du commit qui a produit l'état qu'on vient de
+        // valider, pas le cumul : le commentaire décrit CE tour.
+        refuses: commit.refuses,
+        derniereIteration,
+      });
+
+      if (validation.codeSortie === 0) {
+        etat.succes = true;
+        verdict = {
+          succes: true,
+          motif: `la commande de validation passe après ${i} itération(s).`,
+          code: CODE_RESULTAT,
+          niveau: 'succes',
+        };
+        break;
+      }
+
+      if (derniereIteration) {
+        verdict = {
+          succes: false,
+          // Résultat, donc code 0, mais `::error::` : l'action a fait son travail
+          // et rend son verdict. Rougir ici mettrait une croix rouge sur le dépôt
+          // à chaque issue difficile.
+          motif:
+            `la commande de validation échoue encore après ${maxIterations} itération(s) ` +
+            `(code de sortie ${validation.codeSortie})` +
+            (validation.premierEchec
+              ? `, premier échec reconnu : ${validation.premierEchec}.`
+              : '.'),
+          code: CODE_RESULTAT,
+          niveau: 'erreur',
+        };
+        break;
+      }
+
+      // Correction : le tour suivant existe, donc aider est relancé avec les logs
+      // de CET échec. `construireConsigne` les masque et les tronque lui-même.
+      appelsAider += 1;
+      resultatAider = appelerAider(
+        config,
+        construireConsigne(config, { logsEchec: validation.logs }),
+      );
+      journaliserAppelAider(appelsAider, resultatAider);
+      if (resultatAider.codeSortie !== 0) {
+        verdict = verdictEchecTechniqueAider(appelsAider, resultatAider);
+        break;
+      }
+
+      commit = commiterTravail(`Itération ${i + 1} : correction`);
+      cumulerRefuses(etat, commit.refuses);
+
+      if (!commit.commite) {
+        // Un tour qui ne produit AUCUN commit n'est pas un succès, et enchaîner
+        // serait payer un tour pour rien : le disque n'a pas changé, la validation
+        // rendrait exactement le même résultat. On s'arrête et on le dit.
+        verdict = {
+          succes: false,
+          motif:
+            `aider n'a produit aucune modification commitable au tour ${i + 1} : le code ` +
+            "validé n'aurait pas changé, la boucle s'arrête sans consommer les itérations " +
+            'restantes.' +
+            citationSortieAider(resultatAider.sortie),
+          code: CODE_RESULTAT,
+          niveau: 'avertissement',
+        };
+        break;
+      }
+
+      // Le contrôle porte sur TOUTE la branche (`shaBase..HEAD`), pas sur le dernier
+      // commit : c'est toute la branche que le push envoie.
+      const refus = motifRefusCeinture(preparation);
+      if (refus !== '') {
+        verdict = { succes: false, motif: refus, code: CODE_PANNE, niveau: 'erreur' };
+        break;
+      }
+      pousser(config, preparation, `la correction du tour ${i + 1}`);
+    } finally {
+      fermerGroupe();
+    }
+  }
+
+  if (verdict === null) {
+    // Inatteignable : la boucle sort toujours par un verdict, `maxIterations` étant
+    // >= 1. Traité quand même, parce qu'un verdict nul plus loin serait bien plus
+    // difficile à lire qu'un message ici.
+    verdict = {
+      succes: false,
+      motif: `la boucle s'est terminée sans verdict après ${etat.iterations} itération(s).`,
+      code: CODE_PANNE,
+      niveau: 'erreur',
+    };
+  }
+  return verdict;
+}
+
+/**
+ * Verdict d'un code de sortie non nul d'aider : PANNE, donc code non nul.
+ *
+ * Le code du processus est 1 et non celui d'aider : `appelerAider` rend aussi ses
+ * propres codes conventionnels (124 borne dépassée, 127 lancement impossible), et
+ * les rendre tels quels ferait passer une convention interne pour un code de
+ * sortie d'action. Le code réel d'aider est dans le motif et dans le journal.
+ *
+ * @param {number} numeroAppel
+ * @param {{ codeSortie: number, sortie: string }} resultat
+ */
+function verdictEchecTechniqueAider(numeroAppel, resultat) {
+  return {
+    succes: false,
+    motif:
+      `échec technique — aider est sorti en code ${resultat.codeSortie} à l'appel ` +
+      `${numeroAppel} (clé refusée, crédit épuisé, quota, modèle rejeté, borne de durée ou ` +
+      'plantage). La boucle est arrêtée immédiatement.' +
+      citationSortieAider(resultat.sortie),
+    code: CODE_PANNE,
+    niveau: 'erreur',
+  };
+}
+
+/**
+ * Point d'entrée de la boucle.
+ *
+ * @param {Readonly<object>} config
+ * @param {Readonly<object>} preparation objet rendu par `preparer()` (lot 3a)
  * @returns {number} code de sortie du processus
  */
 function orchestrer(config, preparation) {
-  throw new Error(
-    "L'orchestration (lot 3c) n'est pas encore écrite. Lancer avec " +
-      '--preparer-seulement pour exercer la préparation du checkout (lot 3a).',
+  const etat = {
+    numeroPr: null,
+    iterations: 0,
+    succes: false,
+    refuses: [],
+    maxIterations: nombreMaxIterations(config),
+  };
+
+  journaliser(
+    `Itérations autorisées : ${etat.maxIterations}. Publication : ` +
+      `${config.sansPublication ? 'désactivée (no-publish)' : 'activée'}.`,
   );
+
+  try {
+    const verdict = executerSequence(config, preparation, etat);
+    annoncerVerdict(verdict);
+    tenterCompteRendu(config, {
+      succes: verdict.succes,
+      iterations: etat.iterations,
+      maxIterations: etat.maxIterations,
+      motif: verdict.succes ? '' : sansPointFinal(verdict.motif),
+      refuses: etat.refuses,
+      numeroPr: etat.numeroPr,
+    });
+    return verdict.code;
+  } catch (err) {
+    // Une primitive a levé : jeton absent, push refusé jusque dans son recours,
+    // `gh` injoignable, `COMMANDE_VALIDATION` vide, payload d'événement illisible.
+    // C'est une PANNE d'infrastructure, donc un code non nul — mais le compte rendu
+    // part quand même : sans lui, l'utilisateur voit un job rouge et rien d'autre.
+    const message = err && err.message ? err.message : String(err);
+    erreur(`Panne pendant la boucle : ${message}`);
+    tenterCompteRendu(config, {
+      succes: false,
+      iterations: etat.iterations,
+      maxIterations: etat.maxIterations,
+      // `motifPubliable` et pas `masquerSecrets` seul : ce message recopie le
+      // stderr de git ou de `gh`, qui contient un chemin choisi par le modèle.
+      motif: sansPointFinal(`panne de l'action : ${motifPubliable(message)}`),
+      refuses: etat.refuses,
+      numeroPr: etat.numeroPr,
+    });
+    return CODE_PANNE;
+  } finally {
+    // Dans un `finally` : les sorties de l'action partent sur TOUS les chemins,
+    // succès, résultat, refus et panne comprise. Une exception qui traverserait
+    // quand même ce bloc — `annoncerVerdict` n'en lève pas — laisserait le
+    // consommateur sans aucune sortie.
+    ecrireSortiesResolve(etat);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2332,21 +3099,35 @@ if (require.main === module) {
     process.exitCode = principal(process.argv.slice(2));
   } catch (err) {
     erreur(err && err.message ? err.message : String(err));
+    // Les trois sorties partent AUSSI quand la panne précède la boucle :
+    // `lireConfiguration` lève sur une BRANCHE ou un BRANCHE_BASE invalides,
+    // `preparer` lève sur une base introuvable, un HEAD détaché, un
+    // GITHUB_WORKSPACE absent. Le `finally` d'`orchestrer` ne tourne pas dans ces
+    // cas-là, et sans cette ligne `GITHUB_OUTPUT` n'est jamais écrite : le
+    // consommateur lit `''`, et `'' !== 'false'`. Mesuré avec
+    // `BRANCHE_BASE=inexistante`.
+    //
+    // Idempotent : `ecrireSortiesResolve` ne fait rien si la boucle a déjà écrit son
+    // bloc, donc aucun risque d'un second bloc contradictoire. État par défaut, le
+    // seul honnête ici : aucune PR, aucun tour, aucun succès.
+    ecrireSortiesResolve({ numeroPr: null, iterations: 0, succes: false });
     process.exitCode = 1;
   }
 }
 
-// Les sept primitives du lot 3b sont exportées pour `test/boucle.test.js`, qui
+// Les huit primitives du lot 3b sont exportées pour `test/boucle.test.js`, qui
 // doit pouvoir en exercer une seule sans reconstruire tout l'environnement du
 // runner — c'est la raison d'être des paramètres `config` et `preparation`.
 module.exports = {
   lireConfiguration,
   preparer,
   principal,
+  orchestrer,
   construireConsigne,
   appelerAider,
   executerValidation,
   commiterTravail,
+  pousser,
   publierInitial,
   publierTour,
   publierCompteRendu,

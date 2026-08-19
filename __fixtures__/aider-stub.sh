@@ -36,9 +36,34 @@
 #                        « .aider.conf.yml » (interdit). R8 : une configuration
 #                        déposée au tour 1 serait chargée au tour 2.
 #
+#     auto-commit        Écrit AIDER_STUB_FICHIER (autorisé) puis écrit ET COMMITE
+#                        lui-même AIDER_STUB_FICHIER_AUTO_COMMIT (défaut
+#                        « .github/workflows/ci.yml »). Le vrai aider commite par
+#                        défaut ; `--no-auto-commits` le désactive, mais un
+#                        `.aider.conf.yml` SUIVI par le dépôt consommateur peut le
+#                        réactiver — R8 documente que les flags ne ferment pas
+#                        toute la découverte de configuration. Un chemin interdit
+#                        entre alors dans la branche SANS passer par
+#                        `commiterTravail` : c'est le seul moyen d'atteindre le
+#                        contrôle de ceinture du lot 3c, et de vérifier qu'il est
+#                        refait avant CHAQUE push et pas seulement le premier.
+#
 #     interdits-seuls    Écrit uniquement « .github/workflows/ci.yml » et
 #                        « .aider.conf.yml », rien d'autorisé. Tout est refusé,
 #                        donc aucun commit : R3 + R8 croisés avec R4.
+#
+#   AIDER_STUB_SCENARIOS     Scénarios PAR APPEL, séparés par des virgules :
+#                            « nominal,rien » fait écrire le premier appel et rien
+#                            au second. L'appel n prend le n-ième élément ; au-delà
+#                            du dernier, le dernier est réutilisé. Vide (défaut) :
+#                            AIDER_STUB_SCENARIO s'applique à tous les appels.
+#                            Raison d'être : la troisième formulation d'échec du
+#                            compte rendu (0 < iterations < maxIterations) n'est
+#                            atteignable que par un tour de correction qui ne
+#                            produit AUCUN commit, donc par un stub qui change de
+#                            comportement d'un appel à l'autre. Sans cela, cette
+#                            branche de `publierCompteRendu` n'a aucun test et la
+#                            phrase gelée peut la manger sans que rien ne rougisse.
 #
 #   AIDER_STUB_FICHIER       Chemin du fichier autorisé écrit par les scénarios
 #                            nominal / workflow / conf-aider, relatif au
@@ -165,6 +190,22 @@ fi
 scenario="${AIDER_STUB_SCENARIO:-nominal}"
 fichier="${AIDER_STUB_FICHIER:-resultat-aider.txt}"
 
+# Scénario propre à CET appel, s'il y a une liste. Le dernier élément couvre tous
+# les appels suivants : « nominal,rien » sur quatre appels donne
+# nominal, rien, rien, rien.
+if [ -n "${AIDER_STUB_SCENARIOS:-}" ]; then
+  ancien_ifs="$IFS"
+  IFS=','
+  indice=0
+  for scenario_de_l_appel in ${AIDER_STUB_SCENARIOS}; do
+    indice=$((indice + 1))
+    scenario="$scenario_de_l_appel"
+    [ "$indice" -ge "$appel" ] && break
+  done
+  IFS="$ancien_ifs"
+  printf 'aider-stub: scénario de l’appel %s : %s\n' "$appel" "$scenario" >&2
+fi
+
 ecrire() {
   chemin="$1"
   repertoire="$(dirname "$chemin")"
@@ -197,6 +238,20 @@ case "$scenario" in
   interdits-seuls)
     ecrire ".github/workflows/ci.yml"
     ecrire ".aider.conf.yml"
+    ;;
+  auto-commit)
+    ecrire "$fichier"
+    auto_commite="${AIDER_STUB_FICHIER_AUTO_COMMIT:-.github/workflows/ci.yml}"
+    ecrire "$auto_commite"
+    # Identité passée en `-c` : le stub ne dépend pas de celle du dépôt, et il
+    # n'écrit aucune configuration.
+    if git add -- "$auto_commite" &&
+      git -c user.name=aider-stub -c user.email=aider-stub@exemple.invalide \
+        commit --quiet --no-verify -m "aider-stub: auto-commit de $auto_commite"; then
+      printf 'aider-stub: auto-commité %s\n' "$auto_commite" >&2
+    else
+      printf 'aider-stub: auto-commit de %s a échoué\n' "$auto_commite" >&2
+    fi
     ;;
   *)
     printf 'aider-stub: scénario inconnu « %s »\n' "$scenario" >&2

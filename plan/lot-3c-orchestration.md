@@ -154,9 +154,19 @@ rapport à la version précédente, qui ne pouvait rien vérifier sans clé API 
 
 1. Stub qui écrit un fichier et une validation qui passe → un tour, succès, `iterations=1`.
 2. Stub qui écrit un fichier et une validation qui échoue toujours, `MAX_ITERATIONS=2`
-   → exactement deux tours, deux appels de validation, trois appels d'aider (initial +
-   deux corrections… soit deux, le dernier tour ne relance pas). Compter précisément :
-   c'est là qu'une erreur de borne se cache.
+   → **exactement deux tours, deux appels de validation, DEUX appels d'aider**. Le
+   décompte était ambigu dans la version précédente de ce fichier (« trois… soit
+   deux ») : il est tranché ici, en dépliant la boucle.
+
+   | Étape | Appel |
+   | --- | --- |
+   | consigne initiale | aider nº 1 |
+   | tour 1 | validation nº 1 → rouge, donc aider nº 2 (correction) |
+   | tour 2 | validation nº 2 → rouge, et `i == MAX_ITERATIONS` : on sort **sans** relancer aider |
+
+   Le dernier tour ne relance jamais aider : le faire produirait un commit que rien ne
+   valide jamais. C'est là qu'une erreur de borne se cache, et c'est pour ça que le test
+   compte les appels au lieu de constater « ça a bouclé ».
 3. Stub qui n'écrit rien → chemin R4, aucune PR, code de sortie 0.
 4. Stub qui sort en code 1 → arrêt immédiat, compte rendu d'échec technique, aucune
    itération consommée.

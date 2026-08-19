@@ -30,11 +30,18 @@ const INVISIBLES = /[\u200B-\u200F\u202A-\u202E\u2060\u2066-\u2069\uFEFF]/g;
 // par forme dépendent d'une longueur — un jeton de moins de 34 caractères produit un
 // en-tête base64 de moins de 65 caractères, qui échappait au bloc base64 ci-dessous
 // et partait en clair dans un message d'erreur de git.
+//
+// Le `(?!\[SECRET)` n'est pas une précaution de style : sans lui, la fonction n'est pas
+// IDEMPOTENTE, et elle est appliquée plusieurs fois de suite en pratique — `lib/git.js`
+// masque déjà son stderr, puis l'appelant remasque avant de publier. Mesuré : le
+// marqueur contient une espace, donc `\S+` ne consomme que « [SECRET » et laisse
+// « RETIRÉ] » derrière, ce qui donnait « [SECRET RETIRÉ] RETIRÉ] RETIRÉ] » publié dans
+// un commentaire de PR. Le marqueur est ainsi exclu de ce qui peut être masqué.
 const MOTIFS_SECRET_STRUCTURELS = [
   // `git -c http.extraheader="AUTHORIZATION: basic <base64>"` du lot 3a.
-  [/((?:authorization)\s*:\s*(?:basic|bearer)\s+)\S+/gi, `$1${MARQUEUR_SECRET}`],
+  [/((?:authorization)\s*:\s*(?:basic|bearer)\s+)(?!\[SECRET)\S+/gi, `$1${MARQUEUR_SECRET}`],
   // La paire en clair, avant encodage.
-  [/(x-access-token\s*:\s*)[^\s@]+/gi, `$1${MARQUEUR_SECRET}`],
+  [/(x-access-token\s*:\s*)(?!\[SECRET)[^\s@]+/gi, `$1${MARQUEUR_SECRET}`],
   // Identifiants dans une URL de remote : git les recopie tels quels dans ses
   // messages d'erreur, et c'est la forme que pose `persist-credentials: true`.
   [/(https?:\/\/)[^/\s:@]+(?::[^/\s@]+)?@/g, `$1${MARQUEUR_SECRET}@`],

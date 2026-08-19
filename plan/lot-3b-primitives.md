@@ -373,7 +373,11 @@ gh pr create --repo … --head <BRANCHE> --base <base> --title … --body-file <
 - Tout ce qui part en commentaire **ou en prompt** passe par `masquerSecrets()`.
 - Compte rendu final, formulations reprises du code supprimé :
   - `🎉 Succès ! L'issue #<n> a été résolue en <k> itération(s). La PR est prête pour révision.`
-  - `❌ Échec après <max> itérations. Cause : <motif>.`
+  - `❌ Échec après <max> itération(s). Cause : <motif>.`
+
+    L'accord « itération(s) » a été ajouté en écrivant le lot 3c : `max-iterations: "1"`
+    est une valeur légitime, et « Échec après 1 itérations » se lisait mal. La phrase de
+    succès juste au-dessus portait déjà cette forme.
 - Si des chemins ont été refusés, le dire dans le compte rendu : sinon l'utilisateur
   cherche pourquoi sa demande n'a pas été suivie.
 - Tous les corps par `--body-file`.

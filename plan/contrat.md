@@ -51,7 +51,7 @@ probable de tout le plan.
 
 | Variable | Source |
 | --- | --- |
-| `GITHUB_EVENT_PATH`, `GITHUB_REPOSITORY`, `GITHUB_WORKSPACE`, `GITHUB_ACTION_PATH` | runner |
+| `GITHUB_EVENT_PATH`, `GITHUB_REPOSITORY`, `GITHUB_WORKSPACE`, `GITHUB_ACTION_PATH`, `GITHUB_OUTPUT` | runner — `GITHUB_OUTPUT` est écrite par le lot 3c |
 | `DEEPSEEK_API_KEY` | input `deepseek-api-key` |
 | `GH_TOKEN` | input `github-token` |
 | `NUMERO_ISSUE` | sortie `issue` de la garde |
@@ -101,6 +101,39 @@ jamais à `'false'`.
 
 `poursuivre`, `numero-pr`, `branche`, `iterations`, `succes`. Sans eux, un
 consommateur ne peut rien enchaîner et le smoke test du lot 5 n'a rien à contrôler.
+
+## Sorties écrites par `resolve.js` (lot 3c)
+
+Dans `GITHUB_OUTPUT`, sur **tous** les chemins de sortie, y compris les refus — même
+règle que la garde, et pour la même raison : un consommateur qui lit une sortie absente
+reçoit `''`.
+
+| Sortie | Type | Valeur |
+| --- | --- | --- |
+| `numero-pr` | entier décimal ou `''` | vide quand aucune PR n'a été ouverte : chemin R4, échec technique avant push, ou `no-publish` |
+| `iterations` | entier décimal | nombre de tours de validation **effectués**. `0` si la boucle n'a jamais tourné |
+| `succes` | `'true'` | `'false'` | `'true'` uniquement si la commande de validation est passée |
+
+### Code de sortie du processus
+
+Trois issues, deux codes. C'est la distinction que le lot 2 a déjà tranchée pour la
+garde : un **résultat** n'est pas une **panne**.
+
+| Issue | Code | Pourquoi |
+| --- | --- | --- |
+| Validation passée | 0 | succès |
+| `max-iterations` atteint, validation toujours rouge | **0** | l'action a fait son travail et rend son verdict : `succes=false`, un `::error::` dans le résumé du job, un compte rendu sur la PR. Rougir ici mettrait une croix rouge sur le dépôt à chaque issue difficile, et apprendrait à l'équipe à ignorer la croix |
+| aider rend un code non nul, ou une opération d'infrastructure échoue (push, `gh`) | **non nul** | là, quelque chose est cassé : clé refusée, crédit épuisé, jeton sans droits. Le job doit rougir |
+| Chemin R4 — aider n'a rien commité | 0 | explicitement écrit dans le lot 3c : « ce n'est pas une panne de l'action, c'est un résultat » |
+
+### Le compte rendu final porte un marqueur
+
+`publierCompteRendu` termine son corps par une ligne `<!-- deepseek-resolve:compte-rendu -->`.
+
+Raison d'être : `rendre-compte.js` (lot 4) doit être **idempotent** — il publie le
+compte rendu quand le job meurt avant `publierCompteRendu`, et ne doit rien republier
+sinon. Reconnaître un compte rendu à son emoji serait fragile ; ce marqueur est stable,
+invisible dans le rendu GitHub, et c'est **nous** qui l'écrivons, pas un tiers.
 
 ## Signatures exportées par `scripts/lib/`
 
@@ -176,13 +209,28 @@ Le lot 3c les compose et n'en écrit aucune.
 
 ```js
 construireConsigne(config, { logsEchec = '' } = {})  // -> string          R6
-appelerAider(config, consigne)                       // -> { codeSortie, sortie }
+appelerAider(config, consigne)                       // -> { codeSortie, sortie }  masquée ET bornée
 executerValidation(config)                           // -> { codeSortie, logs, premierEchec }
 commiterTravail(message)                             // -> { commite: bool, refuses: string[] }
-publierInitial(config, preparation, prompt)          // -> { numeroPr }    push + gh pr create
+pousser(config, preparation, quoi)                   // -> void            push seul
+publierInitial(config, preparation, prompt)          // -> { numeroPr }    pousser() + gh pr create
 publierTour(config, i, resultat)                     // -> void            commentaire de PR
 publierCompteRendu(config, bilan)                    // -> void
 ```
+
+### Pourquoi `pousser` existe, ajouté en écrivant le lot 3c
+
+Le contrat n'exposait que `publierInitial`, qui pousse **et** ouvre la PR — donc
+irrappelable au tour 2. Le pseudo-code du lot 3c exige pourtant un push après chaque
+commit de correction, et l'exécutant du lot 3c a dû écrire un pousseur interne : deux
+copies de la même logique (push simple puis `--force-with-lease`, jamais `--force`,
+plus le test de `sansPublication`), dont une seule serait corrigée le jour où elle
+changera.
+
+`pousser` est donc la huitième primitive du lot 3b, et `publierInitial` l'appelle au
+lieu de pousser elle-même. `quoi` est un libellé court pour le journal du job
+(« le premier commit », « la correction du tour 2 ») — sans lui, trois lignes de log
+identiques ne se distinguent pas.
 
 `config` et `preparation` sont passés en arguments plutôt que lus dans un état de
 module : c'est ce qui permet à `test/boucle.test.js` d'exercer une primitive seule,
@@ -196,6 +244,18 @@ lecture du titre et du corps **dans `GITHUB_EVENT_PATH`**) vivent ici. Le lot 3c
 n'appelle que `construireConsigne(config)` au premier tour, puis
 `construireConsigne(config, { logsEchec })` aux tours suivants avec les `logs`
 rendus par `executerValidation`.
+
+### La `sortie` d'`appelerAider` est bornée à la source
+
+Relevé en écrivant le lot 3c : `appelerAider` masquait sa `sortie` mais ne la bornait
+pas, alors que `publierCompteRendu` insère `bilan.motif` **dans une phrase**. Une
+sortie d'aider de plusieurs mégaoctets partait donc dans un commentaire de PR.
+
+La borne est posée dans `appelerAider` et non chez l'appelant : c'est elle qui sait que
+cette chaîne est la sortie d'un sous-processus sans borne connue, et un deuxième
+consommateur ne doit pas avoir à s'en souvenir. Le lot 3c en extrait par ailleurs un
+motif mono-ligne court pour le compte rendu — les deux ne se contredisent pas, ils ne
+servent pas le même endroit.
 
 ### `premierEchec`, troisième champ de `executerValidation`
 
@@ -222,9 +282,22 @@ Chaîne vide si rien n'est reconnu.
 | `succes` | booléen |
 | `iterations` | nombre de tours effectués |
 | `maxIterations` | borne, pour la phrase d'échec |
-| `motif` | cause de l'échec, chaîne vide si succès |
+| `motif` | cause de l'échec, chaîne vide si succès. Court et mono-ligne : il est inséré dans une phrase |
 | `refuses` | cumul dédupliqué des chemins refusés sur tous les tours |
 | `numeroPr` | numéro de PR, ou `null` si aucune PR n'a été ouverte |
+
+Trois formulations d'échec, une par cas, chacune factuelle en une seule phrase :
+
+| Cas | Phrase |
+| --- | --- |
+| `iterations === maxIterations` | la formulation **gelée** par le plan : « ❌ Échec après `<max>` itération(s). Cause : … » |
+| `iterations === 0` | « ❌ Échec. Cause : … » — chemin R4 et échec technique : aucun tour n'a eu lieu, le compte n'apprend rien |
+| entre les deux | « ❌ Échec après `<n>` itération(s) sur `<max>` autorisée(s). Cause : … » — arrêt avant la borne : un tour sans commit, un échec technique en cours de boucle |
+
+Relevé en écrivant le lot 3c, où le compte rendu affichait « ❌ Échec après 2 itérations »
+suivi de « Itérations effectuées : 0 ». La correction n'est pas d'ajouter la ligne du
+compte réel sous la phrase gelée : deux nombres contradictoires dans le même commentaire
+ne disent pas au lecteur lequel croire.
 
 ## Points tranchés au lot 3b
 

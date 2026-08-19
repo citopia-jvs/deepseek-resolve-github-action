@@ -97,6 +97,29 @@ const FIN_DONNEES = '===== FIN DU RAPPORT NON VÉRIFIÉ =====';
 // ce qui part en prompt et en commentaire.
 const JETON_DE_FORME_GITHUB = `ghp_${'A'.repeat(36)}`;
 
+// Marqueur de fin du compte rendu final, tel que `plan/contrat.md` le gèle. Le
+// lot 4 en dépend pour son idempotence : `rendre-compte.js` publie le compte rendu
+// quand le job meurt avant `publierCompteRendu`, et ne doit rien republier sinon.
+const MARQUEUR_COMPTE_RENDU = '<!-- deepseek-resolve:compte-rendu -->';
+
+// ─── Compter les exécutions de la commande de validation ─────────────────────
+//
+// La commande de validation reçoit une COPIE FILTRÉE de l'environnement : une
+// variable qui n'est ni un secret du job ni une `GITHUB_*` y arrive. C'est ce qui
+// permet de compter les tours depuis la commande elle-même, dans un fichier hors
+// du dépôt — le seul compteur qui prouve « exactement deux validations » plutôt
+// que « ça a bouclé ». Un chemin relatif tomberait DANS le checkout, donc dans
+// `git status`, donc dans `commiterTravail`.
+const VARIABLE_COMPTEUR_VALIDATION = 'VALIDATION_COMPTEUR';
+
+const VALIDATION_QUI_PASSE =
+  `printf 'tour\\n' >> "$${VARIABLE_COMPTEUR_VALIDATION}"; ` +
+  "printf 'ok 1 - calcul additionne deux nombres\\n'; exit 0";
+
+const VALIDATION_QUI_ECHOUE =
+  `printf 'tour\\n' >> "$${VARIABLE_COMPTEUR_VALIDATION}"; ` +
+  "printf 'not ok 1 - calcul additionne deux nombres\\n'; exit 1";
+
 // Tout ce que le test écrit vit hors du dépôt. `BOUCLE_TEST_TEMP` permet de
 // choisir la racine (utile pour relire les dépôts jetables après coup) ; le
 // défaut est le temporaire du système, ce qui est ce qu'il faut en CI.
@@ -132,6 +155,11 @@ const fs = require('node:fs');
 const resolve = require(process.env.PILOTE_RESOLVE);
 
 const sortie = { etapes: [], erreur: null };
+
+// Code rendu par orchestrer(), s'il a été appelé. Il devient le code de sortie du
+// PROCESSUS, comme le fait principal() : la distinction « résultat (0) / panne
+// (non nul) » du contrat ne se vérifie pas sur une valeur de retour seule.
+let codeOrchestration = null;
 
 function noter(nom, valeur) {
   sortie.etapes.push({ nom: nom, valeur: valeur });
@@ -189,6 +217,13 @@ try {
     } else if (etape === 'publierCompteRendu') {
       resolve.publierCompteRendu(config, lireJson('PILOTE_BILAN'));
       noter('publierCompteRendu', null);
+    } else if (etape === 'orchestrer') {
+      // Lot 3c, de bout en bout : la boucle entière, pas une primitive isolée.
+      if (preparation === null) {
+        throw new Error("l'étape « orchestrer » exige que « preparer » l'ait précédée");
+      }
+      codeOrchestration = resolve.orchestrer(config, preparation);
+      noter('orchestrer', codeOrchestration);
     } else {
       throw new Error('Etape de pilote inconnue : ' + etape);
     }
@@ -198,7 +233,14 @@ try {
 }
 
 fs.writeFileSync(process.env.PILOTE_SORTIE, JSON.stringify(sortie, null, 2));
-process.exitCode = sortie.erreur === null ? 0 : 1;
+if (sortie.erreur !== null) {
+  process.exitCode = 1;
+} else {
+  // orchestrer() ne lève pas : elle RAPPORTE son verdict par un code. Le pilote le
+  // propage tel quel, sinon le harnais ne peut pas distinguer « max-iterations
+  // atteint » (0) d'un échec technique (non nul).
+  process.exitCode = codeOrchestration === null ? 0 : codeOrchestration;
+}
 `;
 
 fs.writeFileSync(PILOTE, SOURCE_PILOTE, 'utf8');
@@ -324,6 +366,30 @@ function valeurDrapeau(args, drapeau) {
   return position === -1 ? undefined : args[position + 1];
 }
 
+/**
+ * Lit un fichier de la forme de `GITHUB_OUTPUT` : `clé=valeur` par ligne.
+ *
+ * Rend un objet, et la DERNIÈRE valeur gagne — comme le fait le runner. C'est ce
+ * qui permet de repérer un bloc écrit deux fois : la clé y apparaît deux fois,
+ * d'où `occurrences()`.
+ */
+function lireSorties(fichier) {
+  const lignes = lireLignes(fichier);
+  const valeurs = {};
+  for (const ligne of lignes) {
+    const separateur = ligne.indexOf('=');
+    if (separateur === -1) continue;
+    valeurs[ligne.slice(0, separateur)] = ligne.slice(separateur + 1);
+  }
+  return {
+    valeurs,
+    lignes,
+    occurrences(cle) {
+      return lignes.filter((ligne) => ligne.startsWith(`${cle}=`)).length;
+    },
+  };
+}
+
 // ─── Lancement du pilote ─────────────────────────────────────────────────────
 
 /**
@@ -357,6 +423,7 @@ function lancerPilote(cas, options) {
   const envAider = path.join(dossier, 'env-aider');
   const vuAider = path.join(dossier, 'vu-aider');
   const corpsPublies = path.join(dossier, 'corps');
+  const journalValidation = path.join(dossier, 'journal-validation');
 
   const environnement = {
     PATH: chemin,
@@ -405,6 +472,11 @@ function lancerPilote(cas, options) {
     AIDER_STUB_JOURNAL: journalAider,
     AIDER_STUB_JOURNAL_ENV: envAider,
     AIDER_STUB_JOURNAL_VU: vuAider,
+
+    // Compteur des exécutions de la commande de validation. Elle n'est ni un
+    // secret ni une `GITHUB_*` : elle traverse le filtre d'`environnementValidation`
+    // et n'atteint PAS aider, dont l'environnement est une liste blanche.
+    [VARIABLE_COMPTEUR_VALIDATION]: journalValidation,
 
     // Pilote.
     PILOTE_RESOLVE: RESOLVE,
@@ -455,6 +527,8 @@ function lancerPilote(cas, options) {
     stdout: resultat.stdout,
     appelsGh: lireJournal(journalGh),
     appelsAider: lireJournal(journalAider),
+    /** Nombre d'exécutions de la commande de validation — une ligne par tour. */
+    appelsValidation: lireLignes(journalValidation).length,
     envAider: () => lireLignes(envAider),
     vuAider: () => lireLignes(vuAider),
     corps(numeroAppel) {
@@ -1727,9 +1801,13 @@ test('publierTour publie le code de sortie, jamais la sortie brute de la validat
         // dans le commentaire, le canal d'exfiltration est réouvert.
         logs: 'SORTIE-BRUTE-QUI-NE-DOIT-JAMAIS-ETRE-PUBLIEE',
       }),
+      // `iterations` égale `maxIterations` : c'est la condition de la phrase gelée,
+      // que ce cas épingle au caractère près. Valait 1 avant que le lot 3c ne
+      // sépare les trois formulations d'échec — « Échec après 2 itérations » quand
+      // une seule avait tourné était faux.
       PILOTE_BILAN: JSON.stringify({
         succes: false,
-        iterations: 1,
+        iterations: 2,
         maxIterations: 2,
         motif: 'la validation ne passe pas',
         refuses: ['.github/workflows/ci.yml'],
@@ -1763,7 +1841,7 @@ test('publierTour publie le code de sortie, jamais la sortie brute de la validat
   assert.deepEqual(bilan.slice(0, 3), ['issue', 'comment', NUMERO_ISSUE], execution.traces);
   const corpsBilan = execution.corps(2);
   assert.ok(
-    corpsBilan.startsWith('❌ Échec après 2 itérations. Cause : la validation ne passe pas.'),
+    corpsBilan.startsWith('❌ Échec après 2 itération(s). Cause : la validation ne passe pas.'),
     corpsBilan,
   );
   assert.ok(
@@ -1910,4 +1988,919 @@ test('SANS_PUBLICATION=true : ni push, ni appel à gh, sur les trois primitives 
   // Le travail est quand même fait et commité localement.
   assert.equal(execution.valeur('commit').commite, true, execution.traces);
   assert.match(execution.stdout, /no-publish/, execution.traces);
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 6. Orchestration — lot 3c
+//
+// `orchestrer(config, preparation)` de BOUT EN BOUT, dans un dépôt jetable avec
+// un remote nu, jamais primitive par primitive : c'est la composition qu'on
+// vérifie ici, et c'est là que se cachent les erreurs de borne.
+//
+// Deux compteurs, et ils ne sont pas interchangeables avec « ça a bouclé » :
+//
+//   • `execution.appelsAider.length` — le journal d'argv du stub aider ;
+//   • `execution.appelsValidation`   — une ligne écrite par la commande de
+//     validation elle-même, hors du dépôt.
+//
+// Le code de sortie est celui que le pilote propage depuis `orchestrer`, parce que
+// le contrat distingue un RÉSULTAT (0 : validation encore rouge, R4) d'une PANNE
+// (non nul : aider en échec, infrastructure). Vérifier la seule valeur de retour
+// laisserait passer un `process.exitCode` mal câblé.
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Pose une branche `fix-issue-<n>` SUR LE REMOTE seulement, avec un commit.
+ *
+ * C'est le cas réel de R9 : une branche restée sur le remote après une PR fermée
+ * sans suppression, ou après un run annulé qui avait déjà poussé. La branche
+ * locale est supprimée derrière, comme sur un runner neuf — sinon `preparer()`
+ * prendrait le chemin « reprise locale », qui n'est pas celui qu'on veut exercer.
+ *
+ * @returns {string} SHA du commit poussé
+ */
+function poserBrancheDistante(depot, chemin, contenu, message) {
+  git(depot, ['switch', '--quiet', '-c', BRANCHE, 'main']);
+  ecrire(depot, chemin, contenu);
+  git(depot, ['add', '--', chemin]);
+  git(depot, ['commit', '--quiet', '-m', message]);
+  git(depot, ['push', '--quiet', 'origin', `${BRANCHE}:refs/heads/${BRANCHE}`]);
+  const sha = git(depot, ['rev-parse', 'HEAD']);
+  git(depot, ['switch', '--quiet', 'main']);
+  git(depot, ['branch', '-D', BRANCHE]);
+  return sha;
+}
+
+/** SHA de la branche de travail sur le remote, chaîne vide si elle n'y est pas. */
+function shaDistant(depot) {
+  const sortie = git(depot, ['ls-remote', '--heads', 'origin', `refs/heads/${BRANCHE}`]);
+  return sortie === '' ? '' : sortie.split('\t')[0];
+}
+
+/** Le compte rendu final est le DERNIER corps publié. */
+function corpsDuCompteRendu(execution) {
+  return execution.corps(execution.appelsGh.length);
+}
+
+test('3c — validation qui passe : un tour, un appel d’aider, une validation, succès', () => {
+  const depot = creerDepot('orchestration-succes', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-succes-sorties');
+  const execution = lancerPilote('orchestration-succes', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      MAX_ITERATIONS: '2',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+  assert.equal(
+    execution.resultat.status,
+    0,
+    `un succès sort en 0, et c'est le code du processus qui compte\n${execution.traces}`,
+  );
+
+  // Le décompte, pas « ça a bouclé » : une validation qui passe ne relance jamais
+  // aider, sinon le dernier commit ne serait validé par rien.
+  assert.equal(execution.appelsAider.length, 1, execution.traces);
+  assert.equal(execution.appelsValidation, 1, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '91', iterations: '1', succes: 'true' },
+    `les trois sorties de resolve.js, telles que plan/contrat.md les nomme\n${execution.traces}`,
+  );
+
+  // La branche est RÉELLEMENT sur le remote, au SHA local : `pousser` a fait son
+  // travail, et pas seulement journalisé.
+  assert.equal(
+    shaDistant(depot),
+    git(depot, ['rev-parse', 'HEAD']),
+    `la branche n'est pas poussée, ou pas à jour\n${execution.traces}`,
+  );
+  assert.equal(nombreDeCommits(depot), 1, execution.traces);
+
+  // pr create, le commentaire du tour 1, le compte rendu final. Rien de plus :
+  // un tour qui passe ne produit pas de commentaire de correction.
+  assert.equal(
+    execution.appelsGh.length,
+    3,
+    `appels gh inattendus : ${JSON.stringify(execution.appelsGh, null, 2)}`,
+  );
+  assert.deepEqual(execution.appelsGh[0].slice(0, 2), ['pr', 'create'], execution.traces);
+  assert.deepEqual(
+    execution.appelsGh[1].slice(0, 3),
+    ['pr', 'comment', BRANCHE],
+    execution.traces,
+  );
+  assert.deepEqual(
+    execution.appelsGh[2].slice(0, 3),
+    ['pr', 'comment', '91'],
+    `le compte rendu va sur la PR dès que son numéro est connu\n${execution.traces}`,
+  );
+
+  const bilan = corpsDuCompteRendu(execution);
+  assert.ok(
+    bilan.startsWith(`🎉 Succès ! L'issue #${NUMERO_ISSUE} a été résolue en 1 itération(s).`),
+    bilan,
+  );
+});
+
+test('3c — validation toujours rouge, MAX_ITERATIONS=2 : DEUX tours, DEUX validations, DEUX appels d’aider', () => {
+  // Le cas le plus important du lot : c'est là qu'une erreur de borne se cache.
+  // Le dernier tour ne relance JAMAIS aider — cela produirait un commit que rien
+  // ne valide ensuite.
+  const depot = creerDepot('orchestration-borne-deux', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-borne-deux-sorties');
+  const execution = lancerPilote('orchestration-borne-deux', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      MAX_ITERATIONS: '2',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  assert.equal(
+    execution.appelsAider.length,
+    2,
+    `attendu : consigne initiale (aider nº 1), puis correction après le tour 1 (aider ` +
+      `nº 2). Le tour 2 sort sans relancer aider.\n${execution.traces}`,
+  );
+  assert.equal(execution.appelsValidation, 2, execution.traces);
+
+  // Le deuxième appel est bien un appel de CORRECTION : les logs de l'échec du
+  // tour 1 y sont réinjectés par `construireConsigne`.
+  const consigneCorrection = valeurDrapeau(execution.appelsAider[1], '--message');
+  assert.ok(
+    consigneCorrection.includes('# Échec de la validation au tour précédent'),
+    `le second appel n'est pas une correction : les logs du tour 1 n'y sont pas\n${consigneCorrection}`,
+  );
+  assert.ok(
+    consigneCorrection.includes('not ok 1 - calcul additionne deux nombres'),
+    consigneCorrection,
+  );
+
+  // `max-iterations` atteint est un RÉSULTAT : code 0, malgré le `::error::`.
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+  assert.equal(
+    execution.resultat.status,
+    0,
+    `rougir ici mettrait une croix rouge sur le dépôt à chaque issue difficile\n${execution.traces}`,
+  );
+  assert.match(execution.stdout, /::error::la commande de validation échoue encore après 2/, execution.traces);
+  assert.match(execution.stdout, /::group::Itération 1 sur 2/, execution.traces);
+  assert.match(execution.stdout, /::group::Itération 2 sur 2/, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '91', iterations: '2', succes: 'false' },
+    execution.traces,
+  );
+
+  // Deux commits : le premier travail, puis la correction du tour 2. Et le second
+  // est bien parti sur le remote — un push par commit, pas seulement le premier.
+  assert.equal(nombreDeCommits(depot), 2, execution.traces);
+  assert.equal(shaDistant(depot), git(depot, ['rev-parse', 'HEAD']), execution.traces);
+
+  // pr create, tour 1, tour 2, compte rendu.
+  assert.equal(
+    execution.appelsGh.length,
+    4,
+    `appels gh inattendus : ${JSON.stringify(execution.appelsGh, null, 2)}`,
+  );
+  assert.ok(execution.corps(2).includes('### Itération 1'), execution.corps(2));
+  assert.ok(execution.corps(3).includes('### Itération 2'), execution.corps(3));
+  assert.ok(
+    execution.corps(3).includes(
+      '- Suite : c’était la dernière itération autorisée (`max-iterations`), aucune nouvelle ' +
+        'tentative.',
+    ),
+    execution.corps(3),
+  );
+
+  const bilan = corpsDuCompteRendu(execution);
+  assert.ok(
+    bilan.startsWith('❌ Échec après 2 itération(s). Cause : '),
+    `formulation gelée par le plan quand la boucle est allée au bout\n${bilan}`,
+  );
+});
+
+test('3c — la borne à un : MAX_ITERATIONS=1 donne un tour, une validation, un seul appel d’aider', () => {
+  // La borne décalée d'un ne se voit pas à deux : `i <= max` et `i < max` donnent
+  // tous les deux « ça a bouclé ». À un, un décalage produit soit zéro tour, soit
+  // un appel de correction que rien ne validera.
+  const depot = creerDepot('orchestration-borne-un', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-borne-un-sorties');
+  const execution = lancerPilote('orchestration-borne-un', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      MAX_ITERATIONS: '1',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  assert.equal(
+    execution.appelsAider.length,
+    1,
+    `avec une seule itération autorisée, le tour 1 EST le dernier : aucune correction ne ` +
+      `doit être demandée\n${execution.traces}`,
+  );
+  assert.equal(execution.appelsValidation, 1, execution.traces);
+  assert.equal(nombreDeCommits(depot), 1, execution.traces);
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '91', iterations: '1', succes: 'false' },
+    execution.traces,
+  );
+  // pr create, tour 1, compte rendu.
+  assert.equal(
+    execution.appelsGh.length,
+    3,
+    `appels gh inattendus : ${JSON.stringify(execution.appelsGh, null, 2)}`,
+  );
+  assert.ok(
+    corpsDuCompteRendu(execution).startsWith('❌ Échec après 1 itération(s). Cause : '),
+    corpsDuCompteRendu(execution),
+  );
+});
+
+test('3c — R4 : aider n’écrit rien, donc aucune PR, un commentaire sur l’ISSUE, code 0', () => {
+  const depot = creerDepot('orchestration-r4', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-r4-sorties');
+  const execution = lancerPilote('orchestration-r4', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      AIDER_STUB_SCENARIO: 'rien',
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  // Ce n'est pas une panne de l'action, c'est un résultat.
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+  assert.equal(execution.resultat.status, 0, execution.traces);
+
+  assert.equal(execution.appelsAider.length, 1, execution.traces);
+  assert.equal(
+    execution.appelsValidation,
+    0,
+    `rien n'a été commité : valider le dépôt inchangé coûterait un tour pour rien\n${execution.traces}`,
+  );
+  assert.equal(nombreDeCommits(depot), 0, execution.traces);
+
+  // Aucune PR, et surtout rien sur le remote : `gh pr create` aurait échoué sur
+  // « No commits between ».
+  assert.equal(
+    execution.appelsGh.length,
+    1,
+    `appels gh inattendus : ${JSON.stringify(execution.appelsGh, null, 2)}`,
+  );
+  assert.deepEqual(
+    execution.appelsGh[0].slice(0, 3),
+    ['issue', 'comment', NUMERO_ISSUE],
+    `sans PR, le compte rendu va sur l'issue\n${execution.traces}`,
+  );
+  assert.equal(shaDistant(depot), '', `rien ne doit être poussé\n${execution.traces}`);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '', iterations: '0', succes: 'false' },
+    `sorties écrites sur le chemin R4 aussi, « numero-pr » vide\n${execution.traces}`,
+  );
+
+  const bilan = corpsDuCompteRendu(execution);
+  assert.ok(
+    bilan.startsWith("❌ Échec. Cause : aider n'a produit aucune modification commitable"),
+    `aucun tour n'a eu lieu : le compte de tours n'apprend rien, il ne doit pas être ` +
+      `annoncé\n${bilan}`,
+  );
+  assert.ok(
+    !bilan.includes('Échec après'),
+    `la phrase à compte de tours n'a rien à faire sur le chemin R4\n${bilan}`,
+  );
+  assert.match(execution.stdout, /::warning::aider n'a produit aucune modification/, execution.traces);
+});
+
+test('3c — aider sort en code non nul : arrêt immédiat, échec TECHNIQUE, aucune validation, code non nul', () => {
+  // Sans le contrôle du code de sortie, la boucle enchaînerait sur la validation,
+  // échouerait, relancerait aider qui replanterait, consommerait max-iterations,
+  // et rapporterait « aucune modification proposée » — diagnostic FAUX sur le mode
+  // de panne le plus probable en production (clé refusée, crédit épuisé).
+  const depot = creerDepot('orchestration-aider-echec', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-aider-echec-sorties');
+  const execution = lancerPilote('orchestration-aider-echec', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      AIDER_STUB_SCENARIO: 'echec',
+      AIDER_STUB_CODE_SORTIE: '2',
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      MAX_ITERATIONS: '2',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  assert.equal(execution.erreur, null, execution.traces);
+
+  assert.equal(
+    execution.valeur('orchestrer'),
+    1,
+    `un code non nul d'aider est une PANNE : le job doit rougir\n${execution.traces}`,
+  );
+  assert.notEqual(execution.resultat.status, 0, execution.traces);
+
+  assert.equal(execution.appelsAider.length, 1, `arrêt IMMÉDIAT\n${execution.traces}`);
+  assert.equal(
+    execution.appelsValidation,
+    0,
+    `la validation ne doit pas être lancée après un échec technique d'aider\n${execution.traces}`,
+  );
+  assert.equal(nombreDeCommits(depot), 0, execution.traces);
+  assert.equal(shaDistant(depot), '', execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '', iterations: '0', succes: 'false' },
+    `les trois sorties partent même sur le chemin de l'échec technique\n${execution.traces}`,
+  );
+
+  const bilan = corpsDuCompteRendu(execution);
+  assert.deepEqual(
+    execution.appelsGh[0].slice(0, 3),
+    ['issue', 'comment', NUMERO_ISSUE],
+    execution.traces,
+  );
+  assert.ok(
+    bilan.startsWith("❌ Échec. Cause : échec technique — aider est sorti en code 2 à l'appel 1"),
+    `l'échec technique doit être distingué de l'échec de résolution, et nommer le code réel ` +
+      `rendu par aider\n${bilan}`,
+  );
+  assert.ok(
+    bilan.includes('AuthenticationError'),
+    `le dernier message d'aider est le seul diagnostic dont dispose l'utilisateur\n${bilan}`,
+  );
+  assert.match(execution.stdout, /::error::échec technique — aider est sorti en code 2/, execution.traces);
+});
+
+test('3c — SANS_PUBLICATION=true : zéro appel gh, rien sur le remote, mais les commits sont là', () => {
+  const depot = creerDepot('orchestration-sans-publication', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-sans-publication-sorties');
+  const execution = lancerPilote('orchestration-sans-publication', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      SANS_PUBLICATION: 'true',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      MAX_ITERATIONS: '2',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  assert.deepEqual(
+    execution.appelsGh,
+    [],
+    `no-publish interdit TOUTE publication : ni pr create, ni commentaire de tour, ni ` +
+      `compte rendu\n${execution.traces}`,
+  );
+  assert.equal(shaDistant(depot), '', `no-publish n'empêche pas le push\n${execution.traces}`);
+
+  // Toute la séquence se déroule quand même : c'est ce que le lot 3c promet, et
+  // c'est pourquoi no-publish n'atténue AUCUN risque de sécurité.
+  assert.equal(execution.appelsAider.length, 2, execution.traces);
+  assert.equal(execution.appelsValidation, 2, execution.traces);
+  assert.equal(nombreDeCommits(depot), 2, `les commits restent locaux\n${execution.traces}`);
+
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '', iterations: '2', succes: 'false' },
+    `aucune PR ouverte en no-publish : « numero-pr » est vide, mais les deux autres ` +
+      `sorties disent la vérité\n${execution.traces}`,
+  );
+  // Le compte rendu existe, journalisé au lieu d'être publié.
+  assert.match(execution.stdout, /no-publish : compte rendu non publié/, execution.traces);
+  assert.match(execution.stdout, /no-publish : aucun push/, execution.traces);
+});
+
+test('3c — GITHUB_OUTPUT qui pointe un RÉPERTOIRE : ::error::, et le code du verdict est préservé', () => {
+  // La famille de défaut du lot 2 : mourir sur la plomberie des sorties écrase le
+  // verdict réel de la boucle. Un job qui a réussi ne doit pas rougir parce qu'une
+  // variable du runner est mal câblée.
+  const depot = creerDepot('orchestration-sorties-repertoire', { origine: true });
+  const repertoire = path.join(TEMP, 'cas', 'orchestration-sorties-repertoire-cible');
+  fs.mkdirSync(repertoire, { recursive: true });
+  const execution = lancerPilote('orchestration-sorties-repertoire', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: repertoire,
+    },
+  });
+  verifierSansErreur(execution);
+
+  assert.equal(
+    execution.valeur('orchestrer'),
+    0,
+    `le verdict est un succès : l'échec d'écriture des sorties ne doit pas le changer\n${execution.traces}`,
+  );
+  assert.equal(execution.resultat.status, 0, execution.traces);
+  assert.match(
+    execution.stdout,
+    /::error::Écriture de GITHUB_OUTPUT/,
+    `une écriture de sorties perdue en silence laisse le consommateur lire des chaînes ` +
+      `vides sans savoir pourquoi\n${execution.traces}`,
+  );
+  assert.match(execution.stdout, /succes=true/, `le bloc perdu doit être journalisé\n${execution.traces}`);
+});
+
+test('3c — GITHUB_OUTPUT absente : un simple log, ni erreur ni code non nul', () => {
+  // C'est le cas NORMAL hors runner : à la main, en test. Ce n'est pas une erreur.
+  const depot = creerDepot('orchestration-sorties-absentes', { origine: true });
+  const execution = lancerPilote('orchestration-sorties-absentes', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: { COMMANDE_VALIDATION: VALIDATION_QUI_PASSE, GH_STUB_NUMERO_PR: '91' },
+  });
+  verifierSansErreur(execution);
+
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+  assert.match(
+    execution.stdout,
+    /GITHUB_OUTPUT absente, sorties non écrites/,
+    execution.traces,
+  );
+  assert.ok(
+    !execution.stdout.includes('::error::'),
+    `l'absence de GITHUB_OUTPUT n'est pas une erreur\n${execution.traces}`,
+  );
+});
+
+test('3c — panne d’une primitive : les sorties partent quand même, depuis le finally', () => {
+  // `COMMANDE_VALIDATION` vide fait LEVER `executerValidation`, après l'ouverture
+  // de la PR. C'est le seul cas qui distingue une écriture des sorties placée dans
+  // le `finally` d'une écriture placée juste avant le `return` du chemin nominal :
+  // déplacée, elle ne partirait pas d'ici.
+  const depot = creerDepot('orchestration-panne', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-panne-sorties');
+  const execution = lancerPilote('orchestration-panne', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      COMMANDE_VALIDATION: '',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  assert.equal(execution.erreur, null, `orchestrer ne laisse pas filer d'exception\n${execution.traces}`);
+
+  assert.equal(execution.valeur('orchestrer'), 1, execution.traces);
+  assert.notEqual(execution.resultat.status, 0, execution.traces);
+  assert.equal(execution.appelsValidation, 0, execution.traces);
+
+  const lues = lireSorties(sorties);
+  assert.deepEqual(
+    lues.valeurs,
+    { 'numero-pr': '91', iterations: '0', succes: 'false' },
+    `la PR a été ouverte avant la panne : son numéro est la seule chose qui permette à ` +
+      `l'utilisateur de retrouver le travail poussé\n${execution.traces}`,
+  );
+  // Un bloc, pas deux : le consommateur lirait la dernière valeur, pas forcément
+  // la bonne.
+  for (const cle of ['numero-pr', 'iterations', 'succes']) {
+    assert.equal(lues.occurrences(cle), 1, `« ${cle} » est écrite deux fois\n${lues.lignes.join('\n')}`);
+  }
+
+  assert.match(execution.stdout, /::error::Panne pendant la boucle/, execution.traces);
+  const bilan = corpsDuCompteRendu(execution);
+  assert.ok(
+    bilan.startsWith("❌ Échec. Cause : panne de l'action : COMMANDE_VALIDATION est vide"),
+    `le compte rendu part même sur une panne : sans lui, l'utilisateur voit un job rouge ` +
+      `et rien d'autre\n${bilan}`,
+  );
+});
+
+test('3c — contrôle de ceinture : un workflow dans les commits de la branche reprise interdit le push', () => {
+  // La branche distante porte déjà un commit qui touche `.github/workflows/ci.yml`,
+  // repris par le lot 3a. `commiterTravail` n'a rien à refuser ce tour-ci : c'est
+  // exactement le trou que la ceinture ferme. Un push refusé par le serveur pour
+  // cause de workflows coûterait TOUTES les itérations.
+  const depot = creerDepot('orchestration-ceinture', { origine: true });
+  const shaAvant = poserBrancheDistante(
+    depot,
+    '.github/workflows/ci.yml',
+    'name: ci\non: push\n',
+    'run precedent : un workflow est entre dans la branche',
+  );
+  const sorties = path.join(TEMP, 'cas', 'orchestration-ceinture-sorties');
+  const execution = lancerPilote('orchestration-ceinture', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  assert.equal(execution.erreur, null, execution.traces);
+
+  assert.equal(execution.valeur('preparer').reprise, 'distante', execution.traces);
+  assert.ok(
+    execution.stdout.includes('::error::') &&
+      execution.stdout.includes('.github/workflows/ci.yml'),
+    `le refus doit NOMMER le chemin : un refus muet fait chercher au mauvais ` +
+      `endroit\n${execution.traces}`,
+  );
+  assert.equal(execution.valeur('orchestrer'), 1, `régression du filtrage = panne\n${execution.traces}`);
+
+  // Aucun push : le remote n'a pas bougé. Aucune PR : le contrôle est AVANT.
+  assert.equal(shaDistant(depot), shaAvant, `la branche a été poussée\n${execution.traces}`);
+  assert.equal(
+    execution.appelsGh.filter((appel) => appel[0] === 'pr' && appel[1] === 'create').length,
+    0,
+    `aucune pull request ne doit être ouverte : ${JSON.stringify(execution.appelsGh, null, 2)}`,
+  );
+  assert.equal(execution.appelsValidation, 0, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '', iterations: '0', succes: 'false' },
+    execution.traces,
+  );
+});
+
+test('3c — R4 sur une branche REPRISE : shaDepart, jamais shaBase', () => {
+  // Le piège que `shaDepart` existe pour éviter. La branche distante porte déjà un
+  // commit du run précédent : `shaBase..HEAD` est non nul AVANT le premier appel à
+  // aider. Un contrôle R4 sur `shaBase` déclarerait donc ce run réussi, pousserait
+  // et ouvrirait une PR alors qu'aider n'a rien produit.
+  const depot = creerDepot('orchestration-r4-reprise', { origine: true });
+  const shaAvant = poserBrancheDistante(
+    depot,
+    'travail-precedent.txt',
+    'travail du run precedent\n',
+    'run precedent : un commit deja pousse',
+  );
+  const sorties = path.join(TEMP, 'cas', 'orchestration-r4-reprise-sorties');
+  const execution = lancerPilote('orchestration-r4-reprise', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      AIDER_STUB_SCENARIO: 'rien',
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  const preparation = execution.valeur('preparer');
+  assert.equal(preparation.reprise, 'distante', execution.traces);
+  assert.notEqual(
+    preparation.shaDepart,
+    preparation.shaBase,
+    `sans divergence entre les deux SHA, ce cas ne prouve rien\n${execution.traces}`,
+  );
+
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+  assert.equal(
+    execution.appelsGh.filter((appel) => appel[0] === 'pr' && appel[1] === 'create').length,
+    0,
+    `R4 n'a pas été détecté sur une branche reprise : le contrôle compare à shaBase au ` +
+      `lieu de shaDepart\n${JSON.stringify(execution.appelsGh, null, 2)}`,
+  );
+  assert.deepEqual(
+    execution.appelsGh[0].slice(0, 3),
+    ['issue', 'comment', NUMERO_ISSUE],
+    execution.traces,
+  );
+  assert.equal(shaDistant(depot), shaAvant, `rien n'a été poussé\n${execution.traces}`);
+  assert.equal(execution.appelsValidation, 0, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '', iterations: '0', succes: 'false' },
+    execution.traces,
+  );
+  assert.ok(
+    corpsDuCompteRendu(execution).startsWith(
+      "❌ Échec. Cause : aider n'a produit aucune modification commitable",
+    ),
+    corpsDuCompteRendu(execution),
+  );
+});
+
+test('3c — formulation intermédiaire : « Échec après 1 itération(s) sur 3 autorisée(s) », et rien d’autre', () => {
+  // 0 < iterations < maxIterations. Atteint par un tour de correction qui ne
+  // produit AUCUN commit : la boucle s'arrête sans consommer les itérations
+  // restantes. La phrase gelée serait fausse ici, et la faire suivre d'un
+  // « Itérations effectuées : 1 » donnerait deux nombres contradictoires dans le
+  // même commentaire.
+  const depot = creerDepot('orchestration-formulation', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-formulation-sorties');
+  const execution = lancerPilote('orchestration-formulation', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      // Appel 1 : écrit, donc un commit et une PR. Appel 2 (la correction du
+      // tour 2) : n'écrit rien, donc aucun commit.
+      AIDER_STUB_SCENARIOS: 'nominal,rien',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      MAX_ITERATIONS: '3',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  verifierSansErreur(execution);
+
+  assert.equal(execution.appelsAider.length, 2, execution.traces);
+  assert.equal(
+    execution.appelsValidation,
+    1,
+    `le disque n'a pas changé : relancer la validation coûterait un tour pour ` +
+      `rien\n${execution.traces}`,
+  );
+  assert.equal(execution.valeur('orchestrer'), 0, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '91', iterations: '1', succes: 'false' },
+    execution.traces,
+  );
+
+  const bilan = corpsDuCompteRendu(execution);
+  assert.ok(
+    bilan.startsWith('❌ Échec après 1 itération(s) sur 3 autorisée(s). Cause : '),
+    `troisième formulation d'échec du contrat\n${bilan}`,
+  );
+  assert.ok(
+    !bilan.includes('Échec après 3 itération(s)'),
+    `la phrase gelée ne vaut que quand la boucle est allée au bout\n${bilan}`,
+  );
+  assert.ok(
+    !bilan.includes('Itérations effectuées'),
+    `pas de seconde ligne qui donne un autre compte : le lecteur ne saurait pas lequel ` +
+      `croire\n${bilan}`,
+  );
+  assert.equal(
+    bilan.split('\n').filter((ligne) => ligne.includes('itération')).length,
+    1,
+    `un seul compte de tours dans tout le compte rendu\n${bilan}`,
+  );
+});
+
+test('3c — le compte rendu final se termine par le marqueur dont dépend le lot 4', () => {
+  // `rendre-compte.js` (lot 4) publie le compte rendu quand le job meurt avant
+  // `publierCompteRendu`, et ne doit rien republier sinon. Reconnaître un compte
+  // rendu à son emoji serait fragile ; ce marqueur est stable, invisible dans le
+  // rendu GitHub, et c'est NOUS qui l'écrivons.
+  const depot = creerDepot('orchestration-marqueur', {
+    fichiers: { 'src/calcul.js': 'module.exports = () => 5;\n' },
+    origine: true,
+  });
+  const execution = lancerPilote('orchestration-marqueur', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      AIDER_STUB_FICHIER: 'src/calcul.js',
+      COMMANDE_VALIDATION: VALIDATION_QUI_PASSE,
+      GH_STUB_NUMERO_PR: '91',
+    },
+  });
+  verifierSansErreur(execution);
+
+  const bilan = corpsDuCompteRendu(execution);
+  const lignes = bilan.split('\n').filter((ligne) => ligne.trim() !== '');
+  assert.equal(
+    lignes[lignes.length - 1],
+    MARQUEUR_COMPTE_RENDU,
+    `le marqueur doit être la DERNIÈRE ligne du corps\n${bilan}`,
+  );
+  assert.equal(
+    bilan.split(MARQUEUR_COMPTE_RENDU).length - 1,
+    1,
+    `un seul marqueur par compte rendu\n${bilan}`,
+  );
+
+  // Les commentaires de TOUR ne le portent pas : sinon le lot 4 prendrait un
+  // commentaire d'itération pour le compte rendu final et se croirait déjà passé.
+  assert.ok(
+    !execution.corps(2).includes(MARQUEUR_COMPTE_RENDU),
+    `le marqueur ne doit marquer que le compte rendu final\n${execution.corps(2)}`,
+  );
+});
+
+test('3c — aider sort en code non nul À LA CORRECTION : arrêt en cours de boucle, échec technique, code non nul', () => {
+  // Le code de sortie d'aider est contrôlé après CHAQUE appel, pas seulement après
+  // le premier. Sans le contrôle du second, la boucle enchaînerait sur une
+  // validation qui ne peut que rejouer le même échec, et consommerait le crédit et
+  // les itérations restantes pour rien.
+  const depot = creerDepot('orchestration-aider-echec-tour2', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-aider-echec-tour2-sorties');
+  const execution = lancerPilote('orchestration-aider-echec-tour2', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      AIDER_STUB_SCENARIOS: 'nominal,echec',
+      AIDER_STUB_CODE_SORTIE: '3',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      MAX_ITERATIONS: '3',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  assert.equal(execution.erreur, null, execution.traces);
+
+  assert.equal(execution.appelsAider.length, 2, execution.traces);
+  assert.equal(
+    execution.appelsValidation,
+    1,
+    `la validation ne doit pas être relancée après un échec technique d'aider, même en ` +
+      `milieu de boucle : deux itérations restaient autorisées\n${execution.traces}`,
+  );
+  assert.equal(
+    execution.valeur('orchestrer'),
+    1,
+    `un code non nul d'aider est une PANNE, à quel tour que ce soit\n${execution.traces}`,
+  );
+  assert.notEqual(execution.resultat.status, 0, execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '91', iterations: '1', succes: 'false' },
+    `le tour 1 a bien eu lieu : « iterations » vaut 1, pas 0 ni 3\n${execution.traces}`,
+  );
+
+  // Échec technique EN COURS de boucle : troisième formulation, pas la gelée.
+  const bilan = corpsDuCompteRendu(execution);
+  assert.ok(
+    bilan.startsWith(
+      '❌ Échec après 1 itération(s) sur 3 autorisée(s). Cause : échec technique — aider est ' +
+        "sorti en code 3 à l'appel 2",
+    ),
+    bilan,
+  );
+  assert.match(execution.stdout, /::error::échec technique — aider est sorti en code 3/, execution.traces);
+});
+
+test('3c — ceinture avant le push de CHAQUE tour : un workflow auto-commité par aider au tour 2 arrête tout', () => {
+  // aider commite lui-même, comme il le fait par défaut : le chemin interdit
+  // n'entre donc pas par `commiterTravail`, qui n'a rien à se reprocher. Le
+  // contrôle de ceinture du tour 1 est passé — c'est le contrôle refait avant le
+  // push de la correction qui doit attraper celui-ci.
+  const depot = creerDepot('orchestration-ceinture-tour2', { origine: true });
+  const sorties = path.join(TEMP, 'cas', 'orchestration-ceinture-tour2-sorties');
+  const execution = lancerPilote('orchestration-ceinture-tour2', {
+    depot,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      AIDER_STUB_SCENARIOS: 'nominal,auto-commit',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      MAX_ITERATIONS: '3',
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sorties,
+    },
+  });
+  assert.equal(execution.erreur, null, execution.traces);
+
+  // Le chemin interdit est bien ENTRÉ dans les commits de la branche : sans cela,
+  // ce cas ne prouve rien.
+  assert.ok(
+    cheminsCommites(depot).includes('.github/workflows/ci.yml'),
+    `l'auto-commit du stub n'a pas eu lieu : le contrôle de ceinture n'a rien à ` +
+      `attraper\n${execution.traces}`,
+  );
+
+  assert.equal(execution.valeur('orchestrer'), 1, execution.traces);
+  assert.ok(
+    execution.stdout.includes('::error::') &&
+      execution.stdout.includes('.github/workflows/ci.yml'),
+    `le refus doit nommer le chemin\n${execution.traces}`,
+  );
+
+  // Le premier commit est poussé (il était propre), la correction ne l'est PAS.
+  assert.equal(nombreDeCommits(depot), 3, execution.traces);
+  assert.equal(
+    shaDistant(depot),
+    git(depot, ['rev-parse', 'HEAD~2']),
+    `le remote doit être resté au premier commit : la correction ne doit pas être ` +
+      `poussée\n${execution.traces}`,
+  );
+  assert.notEqual(shaDistant(depot), git(depot, ['rev-parse', 'HEAD']), execution.traces);
+
+  const { valeurs } = lireSorties(sorties);
+  assert.deepEqual(
+    valeurs,
+    { 'numero-pr': '91', iterations: '1', succes: 'false' },
+    execution.traces,
+  );
+});
+
+test('3c — MAX_ITERATIONS absente, illisible ou hors bornes : repli sur 2 tours, silencieux dans un cas, annoncé dans les autres', () => {
+  // Trois moitiés qui ne valent que l'une par l'autre : une valeur absente est le cas
+  // NOMINAL hors runner et ne doit rien dire, une valeur illisible doit être signalée
+  // NOMINATIVEMENT. La corriger en silence laisserait croire à l'auteur du workflow
+  // que sa valeur est appliquée — et le repli se compte en crédit DeepSeek et en
+  // minutes de runner.
+  const depotAbsente = creerDepot('orchestration-max-absente', { origine: true });
+  const sortiesAbsente = path.join(TEMP, 'cas', 'orchestration-max-absente-sorties');
+  const absente = lancerPilote('orchestration-max-absente', {
+    depot: depotAbsente,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      MAX_ITERATIONS: '',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sortiesAbsente,
+    },
+  });
+  verifierSansErreur(absente);
+
+  assert.equal(absente.appelsValidation, 2, `le défaut de max-iterations est 2\n${absente.traces}`);
+  assert.equal(absente.appelsAider.length, 2, absente.traces);
+  assert.equal(lireSorties(sortiesAbsente).valeurs.iterations, '2', absente.traces);
+  assert.ok(
+    !absente.stdout.includes('MAX_ITERATIONS illisible'),
+    `une valeur absente est le cas nominal hors runner, pas une anomalie\n${absente.traces}`,
+  );
+
+  const depotIllisible = creerDepot('orchestration-max-illisible', { origine: true });
+  const sortiesIllisible = path.join(TEMP, 'cas', 'orchestration-max-illisible-sorties');
+  const illisible = lancerPilote('orchestration-max-illisible', {
+    depot: depotIllisible,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      MAX_ITERATIONS: 'beaucoup',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sortiesIllisible,
+    },
+  });
+  verifierSansErreur(illisible);
+
+  assert.match(
+    illisible.stdout,
+    /::warning::MAX_ITERATIONS illisible : "beaucoup"/,
+    `le repli doit NOMMER la valeur refusée\n${illisible.traces}`,
+  );
+  assert.equal(illisible.appelsValidation, 2, illisible.traces);
+  assert.equal(lireSorties(sortiesIllisible).valeurs.iterations, '2', illisible.traces);
+  assert.match(illisible.stdout, /Itérations autorisées : 2/, illisible.traces);
+
+  // Hors bornes, et c'est le plafond qui compte : une itération vaut un appel à
+  // aider PLUS une exécution de la commande de validation, donc du crédit DeepSeek
+  // et des minutes de runner. Un `max-iterations: "9999"` recopié d'un exemple
+  // ferait tourner le job jusqu'au `timeout-minutes` du consommateur en payant
+  // chaque tour. 21 plutôt que 9999 pour que le cas reste borné en temps même si le
+  // plafond est cassé : c'est un test, il doit échouer, pas pendre.
+  const depotHorsBornes = creerDepot('orchestration-max-hors-bornes', { origine: true });
+  const sortiesHorsBornes = path.join(TEMP, 'cas', 'orchestration-max-hors-bornes-sorties');
+  const horsBornes = lancerPilote('orchestration-max-hors-bornes', {
+    depot: depotHorsBornes,
+    etapes: ['preparer', 'orchestrer'],
+    env: {
+      MAX_ITERATIONS: '21',
+      COMMANDE_VALIDATION: VALIDATION_QUI_ECHOUE,
+      GH_STUB_NUMERO_PR: '91',
+      GITHUB_OUTPUT: sortiesHorsBornes,
+    },
+  });
+  verifierSansErreur(horsBornes);
+
+  assert.match(
+    horsBornes.stdout,
+    /::warning::MAX_ITERATIONS illisible : "21"/,
+    `une valeur au-dessus du plafond doit être refusée nominativement\n${horsBornes.traces}`,
+  );
+  assert.equal(
+    horsBornes.appelsValidation,
+    2,
+    `le plafond n'est pas appliqué : la boucle a tourné plus de 2 fois\n${horsBornes.traces}`,
+  );
+  assert.equal(lireSorties(sortiesHorsBornes).valeurs.iterations, '2', horsBornes.traces);
 });
