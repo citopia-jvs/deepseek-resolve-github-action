@@ -112,7 +112,12 @@ function tronquer(s, n) {
   // On réserve la place du marqueur le plus long possible : le résultat ne
   // dépasse donc jamais n, même si le compte final s'écrit sur moins de chiffres.
   const restant = n - marqueDe(s.length).length;
-  if (restant <= 0) {
+  // `<= 1` et non `<= 0` : avec exactement un caractère de contenu à répartir,
+  // `Math.ceil(1 / 2)` donnait toute la place à la tête et une queue vide, donc la
+  // tête seule — précisément ce que le contrat interdit. Une seule valeur de `n`
+  // était touchée (la longueur du marqueur plus un), et elle a été trouvée par un
+  // balayage exhaustif, pas par relecture.
+  if (restant <= 1) {
     // n trop petit pour loger le marqueur : on répartit quand même tête et queue.
     // Rendre la tête seule ferait perdre la fin de la sortie, que le contrat exige.
     const teteNue = Math.ceil(n / 2);
