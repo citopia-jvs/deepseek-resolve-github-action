@@ -2225,6 +2225,46 @@ function publierTour(config, i, resultat) {
   }
 }
 
+// Seule source de vérité de la forme du marqueur DANS CE FICHIER. Elle doit rester
+// égale à celle de `scripts/rendre-compte.js`, qui reconnaît ce marqueur pour ne pas
+// republier de doublon : deux formes divergentes, et le filet de sécurité du step
+// `if: always()` poste un second compte rendu à chaque job rouge. Figée dans
+// `plan/contrat.md`.
+const NOM_MARQUEUR_COMPTE_RENDU = 'deepseek-resolve:compte-rendu';
+const MARQUEUR_COMPTE_RENDU = `<!-- ${NOM_MARQUEUR_COMPTE_RENDU} -->`;
+
+/**
+ * Portée du run courant, `''` hors GitHub Actions.
+ *
+ * R9 fait servir le même couple issue / branche à PLUSIEURS runs : sans portée, le
+ * compte rendu du run précédent est encore sur la PR et `rendre-compte.js` se croit
+ * déjà passé — l'utilisateur du run suivant ne reçoit rien alors que le job vient de
+ * mourir. Mesuré, et tranché dans `plan/contrat.md`.
+ *
+ * `GITHUB_RUN_ATTEMPT` est dans la portée à dessein : une relance de job est un
+ * nouveau verdict, donc un compte rendu de plus, pas un doublon.
+ *
+ * `^\d+$` sur les deux valeurs : elles partent dans un commentaire HTML, et une
+ * valeur portant « --> » le refermerait en avance. Toute valeur inattendue est
+ * traitée comme une absence, donc rendue sous la forme nue — que
+ * `rendre-compte.js` reconnaît aussi.
+ *
+ * @returns {string}
+ */
+function porteeDuRun() {
+  const identifiant = lireEnv('GITHUB_RUN_ID');
+  const tentative = lireEnv('GITHUB_RUN_ATTEMPT');
+  if (!/^\d+$/.test(identifiant) || !/^\d+$/.test(tentative)) return '';
+  return `${identifiant}-${tentative}`;
+}
+
+/** Marqueur à écrire en fin de compte rendu, portée du run comprise. */
+function marqueurCompteRendu() {
+  const portee = porteeDuRun();
+  if (portee === '') return MARQUEUR_COMPTE_RENDU;
+  return `<!-- ${NOM_MARQUEUR_COMPTE_RENDU} run=${portee} -->`;
+}
+
 /**
  * Publie le compte rendu final, sur la pull request si elle existe, sinon sur
  * l'issue.
@@ -2236,8 +2276,6 @@ function publierTour(config, i, resultat) {
  * @param {{ succes: boolean, iterations: number, maxIterations: number,
  *           motif: string, refuses: string[], numeroPr: number|null }} bilan
  */
-const MARQUEUR_COMPTE_RENDU = '<!-- deepseek-resolve:compte-rendu -->';
-
 function publierCompteRendu(config, bilan) {
   const lignes = [];
   if (bilan.succes) {
@@ -2295,8 +2333,11 @@ function publierCompteRendu(config, bilan) {
   // fragile ; un commentaire HTML est invisible dans le rendu GitHub, et c'est NOUS
   // qui l'écrivons — ce n'est pas du texte tiers, donc `nettoyerTexteTiers` n'a
   // rien à y voir. Figé dans `plan/contrat.md`.
+  //
+  // Il porte la portée du run (voir `porteeDuRun`) : c'est elle qui distingue CE
+  // compte rendu de celui qu'un run précédent a laissé sur la même PR.
   lignes.push('');
-  lignes.push(MARQUEUR_COMPTE_RENDU);
+  lignes.push(marqueurCompteRendu());
 
   const corps = lignes.join('\n');
 
@@ -3131,4 +3172,9 @@ module.exports = {
   publierInitial,
   publierTour,
   publierCompteRendu,
+  // Exporté pour que `test/compte-rendu.test.js` compare cette forme, caractère par
+  // caractère, à celle de `scripts/rendre-compte.js`. Le contrat exige que les deux
+  // soient égales, et rien d'autre ne le vérifie : deux formes divergentes font
+  // publier un second compte rendu à chaque job rouge, sans qu'aucun test ne rougisse.
+  marqueurCompteRendu,
 };

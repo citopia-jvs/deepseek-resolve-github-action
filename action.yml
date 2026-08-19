@@ -1,31 +1,167 @@
 name: "DeepSeek Auto-Resolve Issue"
 description: "Utilise DeepSeek pour résoudre automatiquement les issues mentionnant @dseek"
-author: "Votre Nom"
+author: "Fabien Sanchez"
 
 inputs:
   deepseek-api-key:
-    description: "Clé API DeepSeek"
+    description: "Clé API DeepSeek. À passer par un secret, jamais en clair."
     required: true
+  github-token:
+    # Pas de `required: true` : exiger une valeur tout en fournissant un défaut est
+    # contradictoire, et GitHub n'applique de toute façon pas `required` sur les
+    # inputs d'action.
+    description: "Jeton GitHub utilisé pour lire l'issue, pousser la branche et publier la PR."
+    required: false
+    default: ${{ github.token }}
   max-iterations:
-    description: "Nombre maximum d'itérations (réflexion/correction/validation)"
+    description: "Nombre maximum de tours réflexion / correction / validation."
     required: false
     default: "2"
   validation-command:
-    description: "Commande à exécuter pour valider la solution (ex: 'npm test')"
+    description: "Commande exécutée dans le dépôt appelant pour valider la correction."
     required: false
     default: "npm test"
   base-branch:
-    description: "Branche de base pour créer la PR (par défaut celle du dépôt)"
+    description: "Branche de base de la pull request. Vide : la branche du checkout."
     required: false
     default: ""
-  github-token:
-    description: "Token GitHub avec droits d'écriture"
-    required: true
-    default: ${{ github.token }}
+  model:
+    # `deepseek-chat` et `deepseek-reasoner` sont retirés de l'API depuis le
+    # 2026-07-24 : seuls `deepseek-v4-pro` et `deepseek-v4-flash` répondent encore.
+    description: "Modèle passé à aider, au format LiteLLM."
+    required: false
+    default: "deepseek/deepseek-v4-pro"
+  aider-version:
+    # Version en dur et non « latest » : une action publiée ne doit pas installer
+    # une version mouvante. Monter cette valeur oblige à revérifier
+    # `aider-models.json` (R5), et installe 301 paquets tiers dans le runner.
+    description: "Version d'aider-chat installée par l'action."
+    required: false
+    default: "0.86.2"
+  python-version:
+    # `aider-chat 0.86.2` déclare requires_python = "<3.13,>=3.10" : sans épinglage,
+    # l'installation casserait le jour où l'image du runner passe à Python 3.14.
+    description: "Version de Python utilisée pour installer aider."
+    required: false
+    default: "3.12"
+  map-tokens:
+    description: "Budget de tokens de la carte du dépôt construite par aider."
+    required: false
+    default: "2048"
+  allowed-associations:
+    description: "Associations au dépôt autorisées à déclencher l'action, séparées par des virgules."
+    required: false
+    default: "OWNER,MEMBER,COLLABORATOR"
+  require-trusted-issue-author:
+    description: "Exiger que l'auteur de l'issue soit lui aussi de confiance pour prendre son corps comme consigne."
+    required: false
+    default: "true"
+  no-publish:
+    description: "Tout exécuter sans rien pousser ni publier : branche locale, aucune PR, aucun commentaire."
+    required: false
+    default: "false"
+  aider-call-timeout-minutes:
+    description: "Durée maximale d'un seul appel à aider, en minutes."
+    required: false
+    default: "15"
+
+# Sans ces sorties, un consommateur ne peut rien enchaîner — étiqueter la PR,
+# notifier, mesurer — et le smoke test n'a rien à contrôler.
+outputs:
+  poursuivre:
+    description: "« true » si la garde a autorisé l'exécution, « false » sinon."
+    value: ${{ steps.garde.outputs.poursuivre }}
+  branche:
+    description: "Nom de la branche de travail, de la forme fix-issue-<n>."
+    value: ${{ steps.garde.outputs.branche }}
+  numero-pr:
+    description: "Numéro de la pull request ouverte, vide si aucune ne l'a été."
+    value: ${{ steps.resoudre.outputs.numero-pr }}
+  iterations:
+    description: "Nombre de tours de validation effectués."
+    value: ${{ steps.resoudre.outputs.iterations }}
+  succes:
+    description: "« true » uniquement si la commande de validation est passée."
+    value: ${{ steps.resoudre.outputs.succes }}
 
 runs:
-  using: "node16"
-  main: "src/index.js"
+  using: composite
+  steps:
+    # Les inputs d'une composite action ne sont PAS exposés en `INPUT_*` aux
+    # sous-processus, contrairement à une JS action : chaque valeur lue par un
+    # script doit figurer dans le `env:` de son step. Les noms sont ceux de
+    # `plan/contrat.md`.
+    #
+    # Les scripts sont appelés via `$GITHUB_ACTION_PATH` et jamais par un chemin
+    # relatif : en `uses: ./` cette variable vaut `GITHUB_WORKSPACE`, donc un
+    # chemin relatif passerait le smoke test local et casserait chez tout
+    # consommateur, où l'action est déployée sous `_actions/<owner>/<repo>/<ref>`.
+    - id: garde
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        ASSOCIATIONS_AUTORISEES: ${{ inputs.allowed-associations }}
+        EXIGER_AUTEUR_ISSUE_DE_CONFIANCE: ${{ inputs.require-trusted-issue-author }}
+      run: node "$GITHUB_ACTION_PATH/scripts/garde.js"
+
+    # La garde tourne avant Python et aider : l'installation prend plus d'une
+    # minute, et l'immense majorité des déclenchements sont des commentaires
+    # d'issue anodins que la garde refuse.
+    - if: steps.garde.outputs.poursuivre == 'true'
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ inputs.python-version }}
+
+    - if: steps.garde.outputs.poursuivre == 'true'
+      shell: bash
+      # `pipx install "aider-chat==<version>"` épingle en réalité tout l'arbre :
+      # aider déclare ses dépendances en `==`. On s'en tient donc à pipx plutôt
+      # qu'à un verrou hashé, dont les 301 lignes seraient à régénérer à chaque
+      # montée de version sans qu'aucun hash ne soit exigé.
+      run: |
+        # Les images Ubuntu embarquent déjà pipx ; ce contrôle sert aux runners
+        # auto-hébergés, macOS ou Windows, où l'erreur serait sinon opaque.
+        command -v pipx >/dev/null || {
+          echo "::error::pipx introuvable. Cette action requiert un runner ubuntu-24.04."
+          exit 1
+        }
+        pipx install --python "$(which python)" "aider-chat==${{ inputs.aider-version }}"
+
+    - id: resoudre
+      if: steps.garde.outputs.poursuivre == 'true'
+      shell: bash
+      env:
+        DEEPSEEK_API_KEY: ${{ inputs.deepseek-api-key }}
+        GH_TOKEN: ${{ inputs.github-token }}
+        NUMERO_ISSUE: ${{ steps.garde.outputs.issue }}
+        BRANCHE: ${{ steps.garde.outputs.branche }}
+        MODELE: ${{ inputs.model }}
+        MAX_ITERATIONS: ${{ inputs.max-iterations }}
+        COMMANDE_VALIDATION: ${{ inputs.validation-command }}
+        BRANCHE_BASE: ${{ inputs.base-branch }}
+        MAP_TOKENS: ${{ inputs.map-tokens }}
+        SANS_PUBLICATION: ${{ inputs.no-publish }}
+        MINUTES_MAX_APPEL_AIDER: ${{ inputs.aider-call-timeout-minutes }}
+        # Sans cette ligne, `resolve.js` lit une chaîne vide, conclut « auteur de
+        # confiance » et reprend le corps de l'issue comme consigne alors que la
+        # garde venait de juger son auteur non autorisé (R6). Aucune erreur ne le
+        # signalerait.
+        CONSIGNE_RESTREINTE: ${{ steps.garde.outputs.consigne-restreinte }}
+      run: node "$GITHUB_ACTION_PATH/scripts/resolve.js"
+
+    # Une composite action n'a pas de `post:` : le schéma ne connaît que
+    # `{using, steps}`. Sans ce step en `always()`, un `resolve.js` qui plante, un
+    # `timeout-minutes` du consommateur ou un job annulé ne laisseraient que la
+    # réaction sur l'issue, sans aucun message expliquant l'arrêt (R12).
+    - if: always() && steps.garde.outputs.poursuivre == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        NUMERO_ISSUE: ${{ steps.garde.outputs.issue }}
+        BRANCHE: ${{ steps.garde.outputs.branche }}
+        STATUT_JOB: ${{ job.status }}
+        SANS_PUBLICATION: ${{ inputs.no-publish }}
+      run: node "$GITHUB_ACTION_PATH/scripts/rendre-compte.js"
 
 branding:
   icon: "cpu"

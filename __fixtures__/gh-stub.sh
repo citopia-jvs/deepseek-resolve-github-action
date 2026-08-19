@@ -45,6 +45,23 @@
 #                                   branche fail-closed de l'étape 7 du lot 2
 #                                   (« état indéterminé sur `gh pr list` ») est
 #                                   inatteignable et rester vert ne prouve rien.
+#                                 echec-view
+#                                   ÉCHEC PARTIEL : seule la LECTURE des
+#                                   commentaires (`pr view` / `issue view
+#                                   --json comments`) sort en GH_STUB_CODE_SORTIE.
+#                                   `pr list` et les commentaires répondent
+#                                   normalement. C'est le seul moyen d'atteindre la
+#                                   dégradation de `rendre-compte.js` — publier sans
+#                                   avoir pu contrôler l'absence de doublon — sans
+#                                   faire tomber la résolution de la PR au passage.
+#                                 echec-commentaire
+#                                   ÉCHEC PARTIEL : seule la PUBLICATION
+#                                   (`pr comment` / `issue comment`) sort en
+#                                   GH_STUB_CODE_SORTIE, les lectures restent
+#                                   intactes. Sans lui, l'échec de publication n'est
+#                                   exerçable qu'avec « echec », qui fait tomber les
+#                                   lectures d'abord : le script n'arrive alors
+#                                   jamais jusqu'à sa branche de publication.
 #
 #   GH_STUB_PERMISSION          Permission renvoyée par
 #                               `gh api repos/…/collaborators/<login>/permission`.
@@ -92,6 +109,68 @@
 #                               dès le retour de l'appel (`avecFichierCorps`). Le
 #                               numéro d'appel est celui du journal, ce qui permet
 #                               d'apparier un corps et son argv.
+#
+#   GH_STUB_PR_LIST             Réponse de `pr list`, INDÉPENDAMMENT du scénario —
+#                               et prioritaire sur lui. Valeurs :
+#                                 aucune  -> []                (chemin « pas de PR »)
+#                                 pr      -> [{"number":<GH_STUB_NUMERO_PR>}]
+#                                 echec   -> sort en GH_STUB_CODE_SORTIE
+#                                 plusieurs-pr
+#                                         -> [{"number":4},{"number":12},{"number":7}]
+#                                   PLUSIEURS pull requests pour la même branche : le
+#                                   compte rendu doit viser la plus récente, donc le
+#                                   plus GRAND numéro. Avec une seule PR servie,
+#                                   remplacer `Math.max` par `Math.min` dans
+#                                   `numeroPrDeLaBranche` restait vert. Trois entrées
+#                                   et non deux, dans cet ordre exprès : 12 n'est ni
+#                                   la première (4) ni la dernière (7) ni la plus
+#                                   petite, donc « prendre la première », « prendre la
+#                                   dernière » et `Math.min` rougissent tous les trois.
+#                                 objet   -> {"number":12}
+#                                   Réponse BIEN FORMÉE en JSON mais qui n'est pas la
+#                                   liste attendue. Ce n'est pas « cette branche n'a
+#                                   pas de PR » : le repli sur l'issue doit s'annoncer.
+#                                 numero-chaine
+#                                         -> [{"number":"12"}]
+#                                   Même famille : la liste est là, le champ `number`
+#                                   n'est pas un entier. `Number.isInteger("12")` est
+#                                   faux, donc aucun numéro n'en sort, et le silence
+#                                   serait de nouveau un silence.
+#                               Vide (défaut) = le scénario décide, donc aucun appel
+#                               existant ne change de comportement. Elle existe pour
+#                               `test/compte-rendu.test.js`, qui doit choisir la
+#                               CIBLE (pull request ou issue) sans emprunter un
+#                               scénario dont le nom parle d'autre chose.
+#
+#   GH_STUB_COMMENTAIRES        Réponse de `pr view <n> --json comments` et de
+#                               `issue view <n> --json comments`. Liste de jetons
+#                               séparés par des virgules, un jeton = un commentaire,
+#                               dans l'ordre :
+#                                 tiers            un commentaire humain, sans marqueur
+#                                 marqueur-nu      un compte rendu portant le marqueur
+#                                                  NU, celui d'un run local ou d'un
+#                                                  run antérieur à la portée
+#                                 marqueur-portee  un compte rendu portant
+#                                                  « run=<GH_STUB_PORTEE_MARQUEUR> »
+#                                 libre            GH_STUB_CORPS_COMMENTAIRE, tel quel
+#                               Deux valeurs ne sont PAS des listes :
+#                                 aucun (défaut)   {"comments":[]}
+#                                 json-invalide    une URL, donc du non-JSON : c'est
+#                                                  ce que répondait ce stub avant, et
+#                                                  ça reste une dégradation à exercer
+#                                 sans-champ       {} — un objet sans « comments »
+#                               Un jeton inconnu fait sortir le stub en 64 : une
+#                               faute de frappe dans un test ne doit pas se lire
+#                               « aucun commentaire », ce qui rendrait le test vert
+#                               pour la mauvaise raison.
+#
+#   GH_STUB_PORTEE_MARQUEUR     Portée écrite dans le jeton « marqueur-portee ».
+#                               Défaut : « 111-1 », donc un AUTRE run que celui du
+#                               test, par défaut.
+#
+#   GH_STUB_CORPS_COMMENTAIRE   Corps du jeton « libre ». Échappé pour JSON par le
+#                               stub : guillemets, contre-obliques et retours à la
+#                               ligne passent.
 #
 # ─── Format du journal ────────────────────────────────────────────────────────
 #
@@ -143,6 +222,86 @@ fi
 repondre_404() {
   printf 'gh: Not Found (HTTP 404)\n' >&2
   exit 1
+}
+
+# --- lecture des commentaires -------------------------------------------------
+#
+# `pr view` / `issue view --json comments` est la seule lecture de
+# `scripts/rendre-compte.js`. Le reste du dépôt ne l'appelle nulle part (relevé :
+# un seul appel, `scripts/rendre-compte.js:425`), mais `pr view` SANS
+# « --json comments » gardait un comportement — une URL — dont on ne touche pas :
+# d'où le drapeau ci-dessous plutôt qu'une branche attrape-tout.
+
+veut_commentaires=0
+precedent=""
+for arg in "$@"; do
+  if [ "$precedent" = "--json" ]; then
+    case "$arg" in *comments*) veut_commentaires=1 ;; esac
+  fi
+  precedent="$arg"
+done
+
+# Échappe pour une chaîne JSON : contre-obliques, guillemets, retours à la ligne.
+# Sans ça, un corps de commentaire piloté par un test casserait le JSON du stub et
+# le script sous test dégraderait — le test passerait au vert en croyant exercer
+# l'idempotence.
+echapper_json() {
+  printf '%s' "$1" \
+    | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' \
+    | awk 'BEGIN { ORS = "" } NR > 1 { print "\\n" } { print }'
+}
+
+# Un corps de compte rendu plausible, terminé par le marqueur qu'on lui passe.
+# La forme est celle de `publierCompteRendu` : la phrase d'échec, une ligne vide,
+# le marqueur en dernier.
+corps_compte_rendu() {
+  printf '%s\n\n%s' \
+    'Echec apres 2 iteration(s). Cause : la validation ne passe pas.' "$1"
+}
+
+emettre_commentaires() {
+  liste="${GH_STUB_COMMENTAIRES:-aucun}"
+
+  case "$liste" in
+    json-invalide)
+      # Ce que ce stub répondait à `pr view` avant l'ajout des commentaires : du
+      # non-JSON. `lib/gh.js` lève, et `rendre-compte.js` publie sans avoir pu
+      # contrôler le doublon. Conservé comme scénario à part entière.
+      printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"
+      return 0
+      ;;
+    sans-champ)
+      printf '{}\n'
+      return 0
+      ;;
+  esac
+
+  marqueur_nu='<!-- deepseek-resolve:compte-rendu -->'
+  marqueur_porte="<!-- deepseek-resolve:compte-rendu run=${GH_STUB_PORTEE_MARQUEUR:-111-1} -->"
+
+  sortie='{"comments":['
+  premier=1
+  ancien_ifs="$IFS"
+  IFS=','
+  for jeton in $liste; do
+    case "$jeton" in
+      aucun|'') continue ;;
+      tiers) corps='Merci, je regarde ca ce soir.' ;;
+      marqueur-nu) corps="$(corps_compte_rendu "$marqueur_nu")" ;;
+      marqueur-portee) corps="$(corps_compte_rendu "$marqueur_porte")" ;;
+      libre) corps="${GH_STUB_CORPS_COMMENTAIRE:-}" ;;
+      *)
+        printf 'gh-stub: jeton GH_STUB_COMMENTAIRES inconnu : %s\n' "$jeton" >&2
+        exit 64
+        ;;
+    esac
+    [ "$premier" = "1" ] || sortie="$sortie,"
+    premier=0
+    sortie="$sortie{\"body\":\"$(echapper_json "$corps")\"}"
+  done
+  IFS="$ancien_ifs"
+
+  printf '%s]}\n' "$sortie"
 }
 
 # --- gh api repos/{o}/{r}/collaborators/{login}/permission --------------------
@@ -222,6 +381,27 @@ done
 # --- sous-commandes ----------------------------------------------------------
 case "${1:-} ${2:-}" in
   "pr list")
+    # Réponse pilotée à la main, prioritaire sur le scénario : le lot 4 doit
+    # choisir la cible (pull request ou issue) sans emprunter un scénario dont le
+    # nom parle d'autorisation.
+    if [ -n "${GH_STUB_PR_LIST:-}" ]; then
+      case "$GH_STUB_PR_LIST" in
+        aucune) printf '[]\n' ;;
+        pr) printf '[{"number":%s}]\n' "$numero_pr" ;;
+        plusieurs-pr) printf '[{"number":4},{"number":12},{"number":7}]\n' ;;
+        objet) printf '{"number":12}\n' ;;
+        numero-chaine) printf '[{"number":"12"}]\n' ;;
+        echec)
+          printf 'gh-stub: « pr list » en échec simulé (GH_STUB_PR_LIST=echec)\n' >&2
+          exit "${GH_STUB_CODE_SORTIE:-1}"
+          ;;
+        *)
+          printf 'gh-stub: GH_STUB_PR_LIST inconnu : %s\n' "$GH_STUB_PR_LIST" >&2
+          exit 64
+          ;;
+      esac
+      exit 0
+    fi
     # Échec ISOLÉ : la permission a déjà répondu plus haut, seul ce contrôle-ci
     # tombe. C'est le seul moyen d'atteindre la branche « état indéterminé » de
     # l'étape 7 du lot 2.
@@ -244,9 +424,27 @@ case "${1:-} ${2:-}" in
     fi
     printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"
     ;;
-  "pr comment"|"issue comment"|"pr view")
-    # `gh` écrit l'URL de l'objet créé ou consulté : c'est là que resolve.js lit
-    # le numéro de PR.
+  "pr view"|"issue view")
+    if [ "$veut_commentaires" = "1" ]; then
+      if [ "$scenario" = "echec-view" ]; then
+        printf 'gh-stub: lecture des commentaires en échec simulé (« echec-view »)\n' >&2
+        exit "${GH_STUB_CODE_SORTIE:-1}"
+      fi
+      emettre_commentaires
+    elif [ "${2:-}" = "view" ] && [ "${1:-}" = "pr" ]; then
+      # Comportement d'avant : `gh` écrit l'URL de l'objet consulté.
+      printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"
+    else
+      # `issue view` tombait dans le cas attrape-tout, qui écrit « [] ».
+      printf '[]\n'
+    fi
+    ;;
+  "pr comment"|"issue comment")
+    if [ "$scenario" = "echec-commentaire" ]; then
+      printf 'gh-stub: publication en échec simulé (« echec-commentaire »)\n' >&2
+      exit "${GH_STUB_CODE_SORTIE:-1}"
+    fi
+    # `gh` écrit l'URL de l'objet créé : c'est là que resolve.js lit le numéro de PR.
     printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"
     ;;
   *)

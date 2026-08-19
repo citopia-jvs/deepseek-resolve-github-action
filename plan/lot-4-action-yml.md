@@ -51,7 +51,10 @@ outputs:
 
 ## `runs`
 
-Quatre steps.
+**Cinq** steps. Ce lot écrivait « quatre » ici et « quatrième step » plus bas pour
+désigner le compte rendu, alors que son propre bloc YAML en porte cinq (garde,
+`setup-python`, installation d'aider, `resoudre`, compte rendu). Corrigé : deux comptes
+contradictoires dans le même fichier obligent le lecteur à recompter.
 
 ```yaml
 runs:
@@ -66,7 +69,7 @@ runs:
       run: node "$GITHUB_ACTION_PATH/scripts/garde.js"
 
     - if: steps.garde.outputs.poursuivre == 'true'
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ inputs.python-version }}
 
@@ -94,6 +97,7 @@ runs:
         MAP_TOKENS: ${{ inputs.map-tokens }}
         SANS_PUBLICATION: ${{ inputs.no-publish }}
         MINUTES_MAX_APPEL_AIDER: ${{ inputs.aider-call-timeout-minutes }}
+        CONSIGNE_RESTREINTE: ${{ steps.garde.outputs.consigne-restreinte }}
       run: node "$GITHUB_ACTION_PATH/scripts/resolve.js"
 
     - if: always() && steps.garde.outputs.poursuivre == 'true'
@@ -121,15 +125,22 @@ Nouveau dans cette version du plan, et non facultatif.
 Sans épinglage, `pipx install aider-chat` échouera à la résolution le jour où
 `ubuntu-latest` basculera. Un step `uses:` est autorisé dans une composite action.
 
+**Correction apportée à l'implémentation : `@v6`, pas `@v5`.** Ce lot écrivait
+`actions/setup-python@v5`. Mesuré sur les `action.yml` publiés : `setup-python@v5`
+déclare `using: 'node20'`, `setup-python@v6` déclare `using: 'node24'`. Le contrat
+épingle déjà `actions/checkout@v5` parce que `node20` quitte les runners le
+2026-09-16 ; garder `setup-python@v5` livrerait une action qui meurt à cette même
+date. Table des versions épinglées du contrat mise à jour.
+
 `pipx` lui-même n'a pas besoin d'être installé : les images Ubuntu 24.04 et 26.04
 embarquent `pipx 1.16.6`. Le `command -v pipx` sert au cas d'un runner auto-hébergé,
 macOS ou Windows, où l'erreur serait sinon opaque. Éviter l'installeur officiel d'aider
 en `curl … | sh` dans une action publiée.
 
-## Le step `if: always()` — R12
+## Le cinquième step, en `if: always()` — R12
 
 Une composite action **n'a pas de `post:`** : le schéma `composite-runs` ne connaît que
-`{using, steps}`. Sans ce quatrième step, un `resolve.js` qui plante, un
+`{using, steps}`. Sans ce cinquième step, un `resolve.js` qui plante, un
 `timeout-minutes` du consommateur qui tombe, ou un job annulé ne laissent que la
 réaction 👀 sur l'issue : aucun commentaire, aucun signal. C'est exactement le scénario
 « l'utilisateur attend et ne comprend pas ».
@@ -141,6 +152,14 @@ composite.
 rendu, ne rien republier. Lire `STATUT_JOB` et le dernier commentaire de la PR.
 
 ## Trois points à ne pas manquer
+
+0. **`CONSIGNE_RESTREINTE` manquait dans le bloc `env:` ci-dessus**, ligne ajoutée à
+   l'implémentation. Le contrat la liste pour `resolve.js` depuis le lot 2, et c'est
+   elle qui porte l'atténuation de R6 : sans la ligne, `resolve.js` lit une chaîne
+   vide, donc « auteur de confiance », donc il reprend le corps de l'issue comme
+   consigne alors que la garde venait de juger son auteur non autorisé. Aucune erreur,
+   aucun test rouge — exactement le mode de panne que ce lot annonce comme le plus
+   probable, et il était dans son propre exemple.
 
 1. **Les inputs ne sont pas exposés automatiquement.** Contrairement à une JS action,
    une composite ne met pas les valeurs à disposition des sous-processus sous forme de
@@ -207,7 +226,17 @@ PY
 
 Le second contrôle est nécessaire parce qu'une faute de frappe dans
 `${{ inputs.mdel }}` s'évalue en **chaîne vide sans erreur** : ni le runner ni aucun
-linter ne la signale. La version précédente affirmait que le smoke test du lot 5
+linter ne la signale.
+
+**Deux défauts de ce bloc de vérification, relevés en l'implémentant.** Il est
+remplacé par `test/action.test.js` (voir « Suites de test du dépôt » dans le contrat),
+et pas seulement parce que `pyyaml` est absent du poste :
+
+- il ne fait que `print()` les deux différences et **sort en 0 même quand elles ne
+  sont pas vides**. Branché tel quel dans la CI du lot 5, il n'aurait jamais rougi ;
+- son motif `r'inputs\.([a-z0-9-]+)'` est en minuscules seulement : `inputs.Model` et
+  `inputs.max_iterations` lui échappent, alors que ce sont précisément des fautes de
+  frappe qui s'évaluent en chaîne vide. Le test utilise `[A-Za-z0-9_-]+`. La version précédente affirmait que le smoke test du lot 5
 validait le câblage des `env:` — c'était faux, les steps porteurs des `env:` sont
 justement ceux que le `if:` saute.
 

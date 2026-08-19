@@ -42,9 +42,24 @@ ferait planter le job dans le dépôt d'un consommateur.
 de dire qu'il ne valide pas `action.yml`, mais elle en avait conclu qu'il fallait
 abandonner l'outil. Il reste utile sur ce fichier-ci et sur l'exemple copiable du lot 6.
 
-Ajouter le contrôle de cohérence `inputs:` ↔ `${{ inputs.* }}` décrit au lot 4. Une
-faute de frappe dans un nom d'input s'évalue en chaîne vide sans erreur : aucun autre
-contrôle ne l'attrape.
+Le contrôle de cohérence `inputs:` ↔ `${{ inputs.* }}` **n'est plus à écrire ici** : le
+lot 4 l'a livré comme `test/action.test.js`, en Node et sans dépendance, parce que le
+bloc Python que ce lot demandait de reprendre était inexécutable (`pyyaml` absent) et,
+surtout, **sortait en 0 même quand il trouvait des différences**. Voir « Suites de test
+du dépôt » dans `contrat.md`. Il suffit donc de lancer la suite avec les autres.
+
+Ce que ce remplacement perd, et qu'il faut couvrir ici : `yaml.safe_load()` validait
+`action.yml` **en tant que YAML**. Le lecteur de blocs de `test/action.test.js` ne le
+fait pas — mesuré, un guillemet non fermé dans une `description:` le laisse vert. Le
+seul contrôle réel est un job qui **utilise** l'action : le runner refuse un
+`action.yml` malformé au chargement. C'est le smoke test ci-dessous, et c'est une raison
+de plus de ne pas s'en passer.
+
+Les six suites du dépôt sont recensées dans « Suites de test du dépôt » de
+`contrat.md` : `chemins` (11), `texte` (22), `garde` (27), `boucle` (58), `action` (13),
+`compte-rendu` (37) — 168 cas au lot 4. Ce lot n'en énumérait que trois : `texte`,
+`action` et `compte-rendu` n'étaient recensés nulle part côté CI, et une suite qu'aucun
+job ne lance ne protège rien.
 
 ## Job 2 — La bibliothèque
 
@@ -86,6 +101,25 @@ vaut **0 partout**, y compris les refus. Un refus n'est pas une panne, et une ac
 
 `GH_CLI=__fixtures__/gh-stub.sh` — le stub versionné, qui écrit `[]`. Pas `/bin/true` :
 stdout serait vide et `JSON.parse('')` lèverait.
+
+## Le smoke test doit faire mourir `resolve.js`, pas seulement passer la garde
+
+Relevé en relisant le lot 4. R12 — le step `if: always()` qui publie le compte rendu de
+secours — repose entièrement sur `${{ job.status }}` tel qu'une composite action le voit,
+et **rien dans le dépôt ne peut le mesurer** : les deux smoke jobs prévus s'arrêtent à la
+garde, donc le step porteur du `if: always()` y est justement sauté.
+
+Deux modes de panne, tous deux silencieux :
+
+- si `job.status` valait toujours `success` dans ce contexte, `rendre-compte.js` sortirait
+  en tête sur tous les runs et R12 serait vide, sans qu'aucun test rougisse ;
+- si elle était vide, il publierait « statut inattendu (`(vide)`) » à chaque run — mesuré
+  en lançant le script avec `STATUT_JOB` absente.
+
+Il faut donc un smoke job qui **fait échouer `resolve.js`** — un `validation-command`
+inexistant ne suffit pas, c'est un résultat et non une panne ; viser un jeton sans droits
+ou un `MODELE` refusé — et qui contrôle qu'un commentaire de secours est publié, une fois
+et une seule.
 
 ## Job 4 — La boucle, hors ligne
 
