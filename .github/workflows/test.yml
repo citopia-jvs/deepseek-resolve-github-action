@@ -82,7 +82,13 @@ jobs:
         # workflow et rend huit erreurs absurdes (« "jobs" section is missing »,
         # « unexpected key "inputs" », …). La cohérence statique d'`action.yml` est
         # contrôlée par `test/action.test.js`, que le job `suites` lance.
-        run: "$RUNNER_TEMP/actionlint"
+        run: |
+          # Guillemets au niveau du SHELL, pas du YAML : dans `run: "$RUNNER_TEMP/…"`,
+          # les guillemets appartiennent au scalaire YAML et le shell reçoit une
+          # expansion nue. Mesuré au premier run réel de cette CI — actionlint y trouve
+          # shellcheck, absent du poste de développement, et rend
+          # « SC2086 Double quote to prevent globbing and word splitting ».
+          "$RUNNER_TEMP/actionlint"
 
   suites:
     name: Suites de test, hors ligne
