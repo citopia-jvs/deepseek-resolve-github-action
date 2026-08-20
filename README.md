@@ -14,10 +14,12 @@ cet ordre : la PR n'existe qu'après le premier appel. Elle boucle ensuite :
 commande de validation du dépôt, et nouvelle tentative en cas d'échec, jusqu'à ce
 que la validation passe ou que `max-iterations` soit atteint.
 
-> **⚠️ Projet en cours de développement.** Le déroulé de bout en bout avec un
-> vrai modèle DeepSeek n'a pas encore été vérifié, et aucune version taguée
-> n'existe à ce jour. Lire la section [Sécurité](#sécurité) avant toute
-> installation.
+> **⚠️ Projet en cours de développement.** Les versions `v1` et `v1.0.0` existent,
+> et les quatre jobs de la CI de ce dépôt sont verts sur le commit qu'elles
+> désignent. Mais le déroulé de bout en bout avec un vrai modèle DeepSeek n'a
+> **jamais** été exécuté, pas une seule fois : ce que la CI prouve, ce sont les
+> suites hors ligne et le montage de l'action, pas une résolution d'issue réelle.
+> Lire la section [Sécurité](#sécurité) avant toute installation.
 
 ## Utilisation
 

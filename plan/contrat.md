@@ -38,9 +38,11 @@ agent sans contexte l'aurait recopiée telle quelle.
 | Référence dans un exemple copiable | `@v1` | tag flottant du lot 8, déplacé sur le dernier `v1.x.y` vert. Un exemple qui montrerait `@main` apprendrait à consommer une branche mouvante |
 | Tag immuable | `v1.0.0` | jamais déplacé, pour le consommateur qui veut exactement ce qu'il a relu |
 
-`git tag` est **vide** aujourd'hui : `@v1` n'existe pas encore. Le README l'écrit quand
-même — c'est la référence que le lot 8 créera, et publier un README qui documente `@main`
-obligerait à le réécrire au premier tag.
+`@v1` et `@v1.0.0` existent depuis le 2026-08-20, posés sur `3de6dd4` — l'arbre relu dans
+la PR #1. Ils ont été écrits dans le README **avant** d'exister, et c'était volontaire :
+un README qui documente `@main` apprend à consommer une branche mouvante, et il aurait
+fallu le réécrire au premier tag. Ce que ces refs prouvent, et surtout ce qu'elles ne
+prouvent pas, est mesuré dans `plan/lot-8-publication.md`.
 
 ## Sorties de `scripts/garde.js` (dans `GITHUB_OUTPUT`)
 
