@@ -63,8 +63,15 @@ Cinq points de cet exemple ne sont pas de simples préférences de style :
 - **`persist-credentials: false`.** Avec le défaut (`true`), un jeton en
   écriture est écrit dans `.git/config` du checkout et devient lisible par
   n'importe quel code qui y tourne — y compris celui que le modèle vient
-  d'écrire. L'action authentifie elle-même son push : elle fonctionne dans les
-  deux cas, mais seul `false` ne laisse pas le jeton traîner sur disque.
+  d'écrire. L'action authentifie elle-même ses opérations distantes — `ls-remote`,
+  `fetch` et `push` — donc elle fonctionne dans les deux cas, mais seul `false` ne
+  laisse pas le jeton traîner sur disque.
+
+  Cette phrase a été fausse jusqu'au premier déroulé sur un vrai runner : seul le
+  push était authentifié, et l'action mourait sur le `ls-remote` de la reprise de
+  branche en `fatal: could not read Username for 'https://github.com'` — donc
+  précisément dans la configuration recommandée ici. Corrigé, et épinglé par un cas
+  de `test/boucle.test.js`.
 - **`runs-on: ubuntu-24.04` en dur, pas `ubuntu-latest`.** `ubuntu-latest` change
   d'image sans préavis. L'action n'utilise pas le Python de l'image — elle installe
   celui de `python-version` — mais elle a besoin de `pipx`, que les images Ubuntu

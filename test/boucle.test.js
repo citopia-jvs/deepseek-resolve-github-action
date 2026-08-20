@@ -2904,3 +2904,130 @@ test('3c — MAX_ITERATIONS absente, illisible ou hors bornes : repli sur 2 tour
   );
   assert.equal(lireSorties(sortiesHorsBornes).valeurs.iterations, '2', horsBornes.traces);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// R7 — toute commande git qui parle au remote porte le préfixe d'authentification
+//
+// Ce cas est un LECTEUR STATIQUE de source, pas une exécution. C'est assumé, et
+// c'est le seul angle disponible : le défaut qu'il ferme a survécu à sept suites
+// vertes parce qu'aucune d'elles n'a de remote qui exige une authentification.
+// Les dépôts jetables du harnais ont un `origine` local, joignable sans jeton —
+// un `ls-remote` nu y réussit. Sur un vrai runner avec
+// `persist-credentials: false`, le même appel sort en
+// « fatal: could not read Username for 'https://github.com' », et le job meurt
+// avant le premier appel à aider.
+//
+// Mesuré : run 32380365244 du dépôt de test, sur le tag `v1`. L'action ne
+// démarrait pas dans la configuration que son propre README recommande.
+//
+// Ce que le cas ne prétend PAS couvrir : une commande distante dont le verbe
+// n'est pas un littéral de chaîne dans un littéral de tableau — verbe calculé,
+// tableau assemblé par `concat`, appel via `spawnSync` direct. Un lecteur
+// statique ne peut pas suivre ça. Le second cas ci-dessous est là pour rougir le
+// jour où la forme change, plutôt que de devenir vert et muet.
+
+// Les commandes git qui ouvrent une connexion au remote. `remote get-url` n'en
+// est pas : elle lit `.git/config`, elle ne parle à personne.
+const VERBES_DISTANTS = ['ls-remote', 'fetch', 'push'];
+
+const SOURCES_GIT = [
+  path.join('scripts', 'resolve.js'),
+  path.join('scripts', 'lib', 'git.js'),
+];
+
+/**
+ * Relève chaque verbe distant qui figure comme ÉLÉMENT d'un littéral de tableau,
+ * avec la tête du tableau qui le précède.
+ *
+ * Deux formes existent dans le dépôt et il faut les deux : l'appel inline
+ * `git([...prefixeAuth, 'fetch', …])`, et le tableau nommé
+ * `const argumentsPush = [...preparation.prefixeAuthentification, 'push', …]`
+ * que `pousser()` monte avant de le passer à `git()`. Un lecteur qui n'aurait
+ * cherché que la première forme aurait laissé le push hors contrôle — c'est
+ * arrivé en écrivant ce cas.
+ *
+ * @param {string} source
+ * @returns {Array<{ verbe: string, tete: string }>}
+ */
+function verbesDistantsEnTableau(source) {
+  const trouves = [];
+  const motif = /'(ls-remote|fetch|push)'/g;
+  let occurrence;
+
+  while ((occurrence = motif.exec(source)) !== null) {
+    // Est-ce un élément de tableau ? `avecBail.indexOf('push')` n'en est pas un :
+    // il est précédé d'une parenthèse. Sans ce filtre, ce cas contrôlerait une
+    // ligne qui ne parle à aucun remote.
+    let avant = occurrence.index - 1;
+    while (avant >= 0 && /\s/.test(source[avant])) avant -= 1;
+    if (source[avant] !== '[' && source[avant] !== ',') continue;
+
+    // Remonter au « [ » qui ouvre le tableau contenant cet élément, en comptant
+    // les crochets refermés entre-temps (`chemins[0]` dans un argument voisin).
+    let profondeur = 0;
+    let debut = -1;
+    for (let j = occurrence.index; j >= 0; j -= 1) {
+      if (source[j] === ']') profondeur += 1;
+      else if (source[j] === '[') {
+        if (profondeur === 0) {
+          debut = j;
+          break;
+        }
+        profondeur -= 1;
+      }
+    }
+
+    // Aucun crochet ouvrant en amont : forme imprévue. On la remonte en échec
+    // avec une tête vide plutôt que de la sauter — un verbe distant qu'on ne
+    // sait pas lire doit rougir, pas disparaître.
+    trouves.push({ verbe: occurrence[1], tete: debut === -1 ? '' : source.slice(debut, occurrence.index) });
+  }
+
+  return trouves;
+}
+
+test('R7 — tout appel git distant porte le préfixe d’authentification', () => {
+  const manquants = [];
+
+  for (const relatif of SOURCES_GIT) {
+    const source = fs.readFileSync(path.join(RACINE, relatif), 'utf8');
+
+    for (const { verbe, tete } of verbesDistantsEnTableau(source)) {
+      // Le préfixe est étalé en TÊTE du tableau : `git -c …` n'a de sens
+      // qu'avant la sous-commande. On exige donc le spread d'un identifiant dont
+      // le nom porte `prefixeAuth`, avant le verbe.
+      const spread = tete.match(/\.\.\.\s*([A-Za-z_$][\w.$]*)/);
+      if (spread === null || !/prefixeAuth/.test(spread[1])) {
+        manquants.push(`${relatif} : « ${verbe} » → ${tete.replace(/\s+/g, ' ').slice(0, 100)}`);
+      }
+    }
+  }
+
+  assert.deepEqual(
+    manquants,
+    [],
+    'Une commande git distante ne porte pas le préfixe d’authentification en tête. ' +
+      'Sous `persist-credentials: false`, elle échouera en « could not read Username ». ' +
+      `Voir la docstring de construirePrefixeAuthentification().\n${manquants.join('\n')}`,
+  );
+});
+
+test('R7 — le lecteur statique des appels git distants voit bien les quatre appels', () => {
+  // Sans ce cas, un changement de forme des appels rendrait le précédent vide,
+  // donc vert, donc muet. Un lecteur statique qui ne trouve plus rien est un
+  // lecteur cassé, pas un dépôt sain.
+  //
+  // Quatre à la date de ce cas : `ls-remote` dans git.js, les deux `fetch` de
+  // `resoudreBase` et `etablirBrancheTravail`, le `push` de `pousser`. Le seuil
+  // est un minimum, pas une égalité : ajouter une opération distante ne doit pas
+  // faire rougir ce cas-ci — c'est le précédent qui la contrôlera.
+  const releves = SOURCES_GIT.flatMap((relatif) =>
+    verbesDistantsEnTableau(fs.readFileSync(path.join(RACINE, relatif), 'utf8')),
+  );
+
+  assert.ok(
+    releves.length >= 4,
+    `le lecteur statique n'a trouvé que ${releves.length} appel(s) git distant(s) au lieu de 4 ` +
+      'au moins : la forme des appels a changé et le cas précédent ne contrôle plus rien',
+  );
+});
