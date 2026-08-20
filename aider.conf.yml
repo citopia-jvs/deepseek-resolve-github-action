@@ -1,0 +1,104 @@
+# Configuration maîtrisée d'aider, livrée par l'action — R8.
+#
+# Passée à aider par `--config "$GITHUB_ACTION_PATH/aider.conf.yml"`.
+#
+# Pourquoi ce fichier existe alors que `scripts/resolve.js` passe déjà les mêmes
+# positions en ligne de commande :
+#
+#   1. `--config` ne désactive PAS la recherche du `.aider.conf.yml` habituel.
+#      `aider/main.py` (0.86.2, lignes 464-496) construit toujours la liste
+#      `default_config_files` = répertoire courant, racine git, `$HOME`, et
+#      `configargparse` 1.7.1 (`configargparse.py`, lignes 1212-1224) ouvre ces
+#      fichiers en plus de celui de `--config`. Le nôtre gagne la priorité, mais
+#      seulement sur les clés qu'il pose : toute clé absente ici retombe sur le
+#      fichier trouvé dans la racine git, c'est-à-dire dans le dépôt du
+#      consommateur — là où le modèle écrit. Un `.aider.conf.yml` déposé au tour 1
+#      serait chargé au tour 2.
+#   2. La ligne de commande l'emporte sur ce fichier. Les deux ne se contredisent
+#      donc jamais : si un flag est un jour oublié dans `resolve.js`, c'est cette
+#      position de repli qui s'applique au lieu du défaut amont — ou pire, de la
+#      valeur d'un fichier déposé par le modèle.
+#
+# Ne rien ajouter ici qui vienne des inputs de l'action : la clé d'API
+# (`DEEPSEEK_API_KEY`), le modèle (`--model`) et `--map-tokens` passent en ligne de
+# commande, et une clé d'API dans un fichier versionné n'a aucune raison d'exister.
+#
+# Toutes les clés ci-dessous sont des `BooleanOptionalAction` d'`aider/args.py`,
+# donc `false` y produit bien `--no-<clé>` (`configargparse.py`, lignes 1135-1141).
+# Ne pas y ajouter de clé `store_true` (`lint`, `test`, `commit`, `upgrade`,
+# `install-main-branch`) : pour celles-là, `false` n'émet aucun argument et
+# n'écrase donc rien.
+
+# --- Commits : c'est l'action qui commite, pas aider (R2, R3) -----------------
+
+# `commiterTravail` filtre les chemins interdits avant de stager. Si aider
+# commitait lui-même, le chemin fautif serait déjà dans un commit au moment où on
+# le détecte, et le push serait refusé par le serveur.
+auto-commits: false
+
+# Sans ça, un fichier que la commande de validation a modifié — un snapshot
+# réécrit par les tests, typiquement — part dans le commit d'aider dès qu'il
+# touche au même fichier.
+dirty-commits: false
+
+# --- Exécution automatique de commandes (R8) ---------------------------------
+
+# `--auto-lint` vaut `true` par défaut et exécute `lint-cmd`, une commande
+# arbitraire. C'est le vecteur exact que ce fichier doit fermer : un
+# `.aider.conf.yml` déposé dans le dépôt consommateur peut fixer `lint-cmd`.
+auto-lint: false
+
+# Même vecteur avec `test-cmd`. La validation, c'est `validation-command`, choisie
+# par l'auteur du workflow et lancée par `executerValidation` avec un
+# environnement filtré — pas par aider avec l'environnement complet du job.
+auto-test: false
+
+# `--yes-always` refuse déjà les commandes shell suggérées par le modèle
+# (`base_coder.py:2459` passe `explicit_yes_required=True`, `io.py:866-867` répond
+# « n »), mais c'est un détail d'implémentation amont qu'un bump de version peut
+# casser.
+suggest-shell-commands: false
+
+# `notifications-command` est une commande arbitraire, lancée à chaque réponse du
+# modèle. Le défaut est déjà `false` ; on le pose pour qu'un fichier déposé ne
+# puisse pas l'activer.
+notifications: false
+
+# --- Dépôt du consommateur ---------------------------------------------------
+
+# Défaut `true` : aider ajoute `.aider*` au `.gitignore` du dépôt. Une
+# modification non demandée, qui plus est dans un fichier que le relecteur de la
+# PR n'attend pas.
+gitignore: false
+
+# --- Réseau et sorties -------------------------------------------------------
+
+# Défaut `true` : aider détecte les URL présentes dans le texte et propose d'en
+# ajouter le contenu au chat — proposition acceptée d'office avec
+# `--yes-always`. Or la consigne contient du texte tiers (corps de l'issue) : ce
+# serait une requête sortante pilotée par l'attaquant.
+detect-urls: false
+
+# Défaut `true`, reposé explicitement : un fichier déposé qui le met à `false`
+# ouvrirait l'interception du trafic vers l'API, donc de la clé et des prompts.
+verify-ssl: true
+
+# Sortie non streamée : dans les logs du runner, le streaming produit des lignes
+# partielles entrelacées, illisibles et inexploitables pour le compte rendu.
+stream: false
+
+# Aucun appel à PyPI au démarrage. La version d'aider est épinglée par l'input
+# `aider-version` ; un contrôle de mise à jour n'y changerait rien et ajoute une
+# dépendance réseau à chaque tour.
+check-update: false
+
+# Pas de télémétrie : les prompts et les noms de fichiers d'un dépôt privé n'ont
+# rien à faire chez un tiers. Le défaut est « aléatoire », donc il faut trancher.
+analytics: false
+
+# --- Format d'édition (R5) ---------------------------------------------------
+
+# À poser explicitement : aider déduit normalement le format d'édition du modèle,
+# or les modèles DeepSeek V4 sont inconnus de la table de `litellm` 1.81.10. Sans
+# cette ligne, le format retenu dépend d'un repli.
+edit-format: diff

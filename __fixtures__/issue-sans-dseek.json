@@ -1,0 +1,9 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 8,
+    "body": "La documentation d'installation ne mentionne pas la version de Node exigée.",
+    "user": { "login": "mainteneuse" },
+    "author_association": "OWNER"
+  }
+}

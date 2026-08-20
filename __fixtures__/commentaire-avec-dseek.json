@@ -1,0 +1,13 @@
+{
+  "action": "created",
+  "issue": {
+    "number": 7,
+    "user": { "login": "mainteneuse" }
+  },
+  "comment": {
+    "id": 2001,
+    "body": "@dseek relance la correction, le test est toujours rouge.",
+    "user": { "login": "mainteneuse" },
+    "author_association": "OWNER"
+  }
+}

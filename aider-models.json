@@ -1,0 +1,20 @@
+{
+  "deepseek/deepseek-v4-pro": {
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 393216,
+    "input_cost_per_token": 0.00000132,
+    "output_cost_per_token": 0.00000396,
+    "litellm_provider": "deepseek",
+    "mode": "chat",
+    "supports_function_calling": true
+  },
+  "deepseek/deepseek-v4-flash": {
+    "max_input_tokens": 1000000,
+    "max_output_tokens": 393216,
+    "input_cost_per_token": 0.00000044,
+    "output_cost_per_token": 0.00000132,
+    "litellm_provider": "deepseek",
+    "mode": "chat",
+    "supports_function_calling": true
+  }
+}

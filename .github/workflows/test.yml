@@ -1,0 +1,247 @@
+# Contrôles du dépôt de l'action elle-même.
+#
+# Ce que cette CI ne prouve pas, et qui reste à la vérification de bout en bout :
+# la boucle avec un vrai modèle, et l'exécution effective du step `if: always()`
+# dans un job déjà rouge. Aucune clé DeepSeek n'est déposée dans les secrets de ce
+# dépôt : un workflow déclenché depuis une PR de fork y aurait accès dans certaines
+# configurations.
+name: Contrôles
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Aucun de ces jobs n'écrit quoi que ce soit : le défaut du dépôt est peut-être plus
+# permissif, et les smokes montent une action qui sait pousser et commenter.
+permissions:
+  contents: read
+
+# Le shell par défaut d'un `run:` sous Linux est `bash -e {0}`, **sans** `pipefail` :
+# l'échec du premier maillon du tube `find … | xargs …` du job `syntaxe` serait avalé.
+# Mesuré, sur un arbre sain dont un répertoire de la liste a été renommé :
+# `find scripts test absent … | xargs …` rend **0** sans `pipefail` et 1 avec, alors que
+# `find` a écrit « No such file or directory » — le contrôle cesserait de contrôler en
+# restant vert. `shell: bash` donne `bash --noprofile --norc -eo pipefail {0}`.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  # Les identifiants de ces quatre jobs sont figés dans plan/contrat.md : ce sont les
+  # noms des checks obligatoires d'une branche protégée.
+  syntaxe:
+    name: Syntaxe des scripts et des workflows
+    # En dur, jamais `ubuntu-latest` : celui-ci basculera sur 26.04, dont le Python
+    # 3.14 est hors de la borne `<3.13` d'aider-chat (R11). Les jobs de ce dépôt
+    # doivent tourner sur l'image recommandée aux consommateurs. Mesuré : actionlint
+    # accepte `ubuntu-latest` sans un mot, dans les quatre jobs — ces quatre lignes ne
+    # tiennent qu'à la relecture.
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      - name: Journaliser la version de Node
+        # Node n'est pas épinglé et il ne doit pas l'être : l'action appelle le
+        # `node` de l'image du runner, chez le consommateur comme ici. La valeur du
+        # run est journalisée pour qu'un changement d'image majeur soit datable.
+        run: node --version
+
+      - name: Contrôler que tous les scripts et toutes les suites se chargent
+        # `xargs` et non `-exec`. Deux mesures sur ce dépôt, avec un fichier
+        # volontairement cassé :
+        #   `-exec node --check {} \;` rend **0** — ce contrôle ne peut pas échouer ;
+        #   `-exec node --check {} +` ne contrôle que le **premier** fichier du lot,
+        #   `node --check` ignorant silencieusement ses arguments suivants.
+        # `xargs -0 -n1` fait un appel par fichier et rend non nul.
+        run: find scripts test -name '*.js' -print0 | xargs -0 -n1 node --check
+
+      - name: Installer actionlint
+        # Pas d'action tierce : mesuré, `rhysd/actionlint` ne publie **aucun**
+        # `action.yml` — raw.githubusercontent.com/rhysd/actionlint/v1.7.12/action.yml
+        # rend 404 — donc `uses: rhysd/actionlint@v1.7.12` n'existe pas.
+        # Version et condensat épinglés par plan/contrat.md.
+        env:
+          VERSION_ACTIONLINT: 1.7.12
+          SHA256_ACTIONLINT: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          # `-f` : sans lui, curl enregistrerait une page d'erreur HTML, le condensat
+          # échouerait, et le message accuserait la mauvaise cause.
+          curl -fsSL -o "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${VERSION_ACTIONLINT}/actionlint_${VERSION_ACTIONLINT}_linux_amd64.tar.gz"
+          # Contrôle **avant** extraction : une archive extraite puis vérifiée a déjà
+          # écrit ses fichiers sur le disque.
+          echo "${SHA256_ACTIONLINT}  ${archive}" | sha256sum -c -
+          tar -xzf "$archive" -C "$RUNNER_TEMP" actionlint
+
+      - name: actionlint sur .github/workflows
+        # Sans argument, actionlint trouve seul `.github/workflows` depuis la racine
+        # du dépôt. Ne **jamais** lui passer `action.yml` : mesuré, il le lit comme un
+        # workflow et rend huit erreurs absurdes (« "jobs" section is missing »,
+        # « unexpected key "inputs" », …). La cohérence statique d'`action.yml` est
+        # contrôlée par `test/action.test.js`, que le job `suites` lance.
+        run: |
+          # Guillemets au niveau du SHELL, pas du YAML : dans `run: "$RUNNER_TEMP/…"`,
+          # les guillemets appartiennent au scalaire YAML et le shell reçoit une
+          # expansion nue — SC2086, relevé au premier run réel de cette CI. Le poste de
+          # développement n'a pas l'outil que actionlint appelle ici, et saute donc ce
+          # contrôle en silence : un vert local est plus faible qu'un vert en CI.
+          # Et ne pas commencer une ligne de commentaire par le nom de cet outil :
+          # elle serait lue comme une directive, et refusée (SC1073).
+          "$RUNNER_TEMP/actionlint"
+
+  suites:
+    name: Suites de test, hors ligne
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      - name: Contrôler que les suites recensées existent
+        # Un glob ne peut pas voir une suite **supprimée ou renommée** : il lance ce
+        # qu'il trouve et se tait. Ce sens-là est donc fermé à la main, sur la liste
+        # de « Suites de test du dépôt » de plan/contrat.md — seul endroit qui les
+        # recense. La boucle signale toutes les absentes en un run plutôt que de
+        # s'arrêter à la première.
+        #
+        # `test/ci.test.js` y figure comme les autres, bien que ce soit elle qui lise
+        # ce fichier. Sans sa ligne, la supprimer ne serait signalée par rien : le glob
+        # cesserait de la lancer sans un mot, et tous les contrôles du workflow — le
+        # runner en dur, la forme du `node --check`, le condensat d'actionlint —
+        # disparaîtraient avec elle.
+        run: |
+          manquantes=0
+          for suite in \
+            test/chemins.test.js \
+            test/texte.test.js \
+            test/garde.test.js \
+            test/boucle.test.js \
+            test/compte-rendu.test.js \
+            test/action.test.js \
+            test/ci.test.js
+          do
+            if [ ! -f "$suite" ]; then
+              echo "::error::suite recensée dans plan/contrat.md absente du dépôt : $suite"
+              manquantes=1
+            fi
+          done
+          exit "$manquantes"
+
+      - name: Lancer toutes les suites
+        # Par un glob et non par la liste ci-dessus : c'est le sens inverse — une
+        # suite **ajoutée** est lancée sans que personne y pense. C'est une liste
+        # écrite à la main qui avait laissé `texte`, `action` et `compte-rendu` hors
+        # CI. Les deux sens sont fermés, et un oubli ne peut rendre la CI que plus
+        # rouge.
+        #
+        # Pas de `nullglob` : mesuré, sans correspondance bash passe le motif littéral
+        # à `node`, qui rend `MODULE_NOT_FOUND` et un code non nul — « plus aucune
+        # suite » est un cas bruyant, pas silencieux.
+        # Ni `GH_CLI` ni `AIDER_CLI` : mesuré, les poser ne change rien, chaque suite
+        # construit l'environnement des sous-processus qu'elle lance au lieu d'hériter
+        # du sien — et `test/boucle.test.js` vérifie justement que la trappe
+        # `AIDER_STUB_*` est **fermée** quand `AIDER_CLI` est absente.
+        run: |
+          for suite in test/*.test.js; do
+            echo "── $suite"
+            node "$suite"
+          done
+
+  smoke-local:
+    name: Montage de l'action en uses ./
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Récupérer le dépôt
+        uses: actions/checkout@v5
+
+      # Ce job **monte** réellement l'action, et c'est le seul contrôle du dépôt qui
+      # refuse un `action.yml` malformé : le runner le charge. `actionlint` ne lit pas
+      # `action.yml`, et le lecteur de blocs de `test/action.test.js` ne valide pas le
+      # YAML — mesuré, un guillemet non fermé dans une `description:` le laisse vert.
+      # Sont exercés du même coup : la validité de `runs:`, la présence des `shell:`,
+      # la résolution des `uses:` internes et la remontée des `outputs:`.
+      - id: action
+        uses: ./
+        with:
+          # Clé factice, et elle ne part nulle part : l'événement est `push` ou
+          # `pull_request`, la liste blanche d'événements de la garde refuse, aider
+          # n'est jamais installé. `github-token` n'est pas passé — son défaut
+          # `${{ github.token }}` suffit, et ce job le vérifie.
+          deepseek-api-key: factice
+          no-publish: "true"
+
+      - name: Contrôler les sorties remontées par l'action
+        # Les valeurs passent par `env:` et jamais par `${{ … }}` dans le corps du
+        # `run:`. Elles viennent de notre garde, mais interpoler une valeur dans un
+        # script shell est le motif que ce dépôt refuse partout ailleurs (R6, R7).
+        # Mesuré : sur une sortie de step, actionlint ne dit **rien** — il ne relève que
+        # les contextes qu'il sait non fiables (`${{ github.event.issue.title }}` dans un
+        # `run:` → « is potentially untrusted »). Ici la discipline ne tient donc qu'à
+        # elle-même, ce qui est une raison de plus de ne pas y faire d'exception.
+        env:
+          POURSUIVRE: ${{ steps.action.outputs.poursuivre }}
+          SUCCES: ${{ steps.action.outputs.succes }}
+          NUMERO_PR: ${{ steps.action.outputs.numero-pr }}
+        run: |
+          if [ "$POURSUIVRE" != "false" ]; then
+            echo "::error::poursuivre attendu « false », obtenu « $POURSUIVRE »"
+            exit 1
+          fi
+          # `succes` et `numero-pr` viennent du step `resoudre`, sauté par le `if:` de
+          # la garde. La sortie d'un step sauté vaut la chaîne vide : les contrôler
+          # prouve que le bloc `outputs:` se résout **quand même**, au lieu de faire
+          # échouer le montage de l'action.
+          if [ -n "$SUCCES" ]; then
+            echo "::error::succes attendu vide (step resoudre sauté), obtenu « $SUCCES »"
+            exit 1
+          fi
+          if [ -n "$NUMERO_PR" ]; then
+            echo "::error::numero-pr attendu vide (step resoudre sauté), obtenu « $NUMERO_PR »"
+            exit 1
+          fi
+          echo "Sorties conformes : poursuivre=false, succes et numero-pr vides."
+
+  smoke-sous-repertoire:
+    name: Montage de l'action depuis un sous-répertoire
+    runs-on: ubuntu-24.04
+    steps:
+      # Dans un sous-répertoire, et **rien** à la racine du workspace : c'est voulu,
+      # un `node scripts/garde.js` relatif n'y trouverait aucun `scripts/`.
+      # Ce `path:` et le `uses: ./copie-action` ci-dessous doivent rester d'accord :
+      # mesuré, actionlint reste vert quand le répertoire visé n'existe pas — il lit
+      # l'`action.yml` local quand il le trouve et se tait sinon. Seul le runner refuse.
+      - name: Récupérer le dépôt dans un sous-répertoire
+        uses: actions/checkout@v5
+        with:
+          path: copie-action
+
+      # Seul job où `GITHUB_ACTION_PATH` diffère de `GITHUB_WORKSPACE`, donc seul job
+      # qui fasse rougir un chemin relatif vers un script de l'action.
+      # `ActionManager.cs:699-705` du runner : pour une référence locale,
+      # `actionDirectory` part de `GITHUB_WORKSPACE` puis y **joint** le chemin de la
+      # référence. `uses: ./` donne `GITHUB_ACTION_PATH == GITHUB_WORKSPACE` et laisse
+      # donc passer un chemin relatif ; `uses: ./copie-action` donne
+      # `GITHUB_WORKSPACE/copie-action`, où il ne résout plus.
+      #
+      # Pas de référence distante `owner/repo@${{ github.sha }}` pour obtenir cet
+      # écart : une expression n'est pas permise dans un `uses:` — actionlint rend
+      # « context "github" is not allowed here. no context is available here », donc ce
+      # job aurait fait rougir notre propre job `syntaxe`. La forme locale marche en
+      # plus sur une PR de fork, sans commit poussé.
+      - id: action
+        uses: ./copie-action
+        with:
+          deepseek-api-key: factice
+          no-publish: "true"
+
+      - name: Contrôler la sortie poursuivre
+        env:
+          POURSUIVRE: ${{ steps.action.outputs.poursuivre }}
+        run: |
+          if [ "$POURSUIVRE" != "false" ]; then
+            echo "::error::poursuivre attendu « false », obtenu « $POURSUIVRE »"
+            exit 1
+          fi
+          echo "Sortie conforme depuis un sous-répertoire : poursuivre=false."
