@@ -17,10 +17,40 @@ vraies.
 | Les onze cas de bout en bout | **aucun n'a été fait**. Sept d'entre eux exigent une vraie `DEEPSEEK_API_KEY` et un dépôt de test |
 | `origin/main` contre `main` local | `origin/main` est à `64b20d0 first commit`, `main` local à `568c83d` — divergence antérieure à ce plan |
 
-Conclusion : **les tags ne peuvent pas être posés aujourd'hui**, et ce n'est pas un
-détail de calendrier. La porte ci-dessous le dit elle-même, et les cas qu'elle exige sont
-précisément ceux qui couvrent R2, R3, R4, R6, R8, R9 et R12 — c'est-à-dire tout ce que
-les suites hors ligne ne peuvent pas prouver.
+Conclusion, **au moment de ce relevé** : les tags ne peuvent pas être posés, et ce n'est
+pas un détail de calendrier. La porte ci-dessous le dit elle-même, et les cas qu'elle
+exige sont précisément ceux qui couvrent R2, R3, R4, R6, R8, R9 et R12 — c'est-à-dire
+tout ce que les suites hors ligne ne peuvent pas prouver.
+
+## Ce qui a réellement été fait, mesuré le 2026-08-20
+
+Le tableau ci-dessus est un instantané, et il est **périmé** : la PR a été fusionnée et
+les tags sont posés. La porte ci-dessous n'a donc **pas** été franchie entièrement — elle
+a été levée sur décision explicite, avec un bout en bout toujours à 0/11. C'est écrit ici
+parce qu'un lecteur qui trouve `v1` publié doit savoir sur quoi cette référence s'appuie.
+
+| Fait | Mesuré |
+| --- | --- |
+| PR #1 | **fusionnée** en **squash** : le commit de `main` n'a qu'**un seul parent**, donc les **16** commits que la branche apportait au moment de la fusion — 13 au relevé ci-dessus, avant les lots 6, 7 et 8 — ne sont pas dans l'histoire de `main`. Mesuré par `git rev-list --count 64b20d0..5217129` |
+| `origin/main` | `3de6dd4`, dont l'arbre est **identique** à celui du tip relu `5217129` — `git diff 5217129 3de6dd4` est vide. C'est ce qui rend le squash sans conséquence pour le tag |
+| La CI sur `3de6dd4` | **quatre jobs verts**, run `32370404597`, sur `main` lui-même et non sur la PR |
+| Les suites sur ce commit | **206 cas verts**, et `actionlint` 1.7.12 code 0 |
+| `refs/tags/v1.0.0` | tag **annoté** `dd625f8`, pelé sur `3de6dd4`. Son message énumère ce qui est vérifié et ce qui ne l'est pas |
+| `refs/tags/v1` | tag **léger** sur `3de6dd4` |
+| Ce que GitHub sert aux deux refs | `action.yml` (blob `f89a4b7`, 7679 octets) et `scripts/` complet, relevé par `gh api repos/{o}/{r}/contents/…?ref=v1` |
+| Les onze cas de bout en bout | **toujours 0/11** |
+| Un dépôt de test consommant `@v1` | **toujours aucun** |
+
+La seule chose que ces deux refs prouvent est qu'elles se résolvent et servent le bon
+arbre. Ni R2, ni R3, ni R4, ni R6, ni R8, ni R9, ni R12 n'ont été exercés contre un vrai
+modèle. Le `README.md` le dit au consommateur : ne pas retirer cet avertissement avant
+que le bout en bout soit fait.
+
+Une conséquence de cet ordre inhabituel, que la section « Rollback » ci-dessous ne
+couvrait pas : elle suppose qu'il existe un `v1.x.y` **précédent** sur lequel ramener
+`v1`. Il n'y en a aucun. Si le bout en bout sort rouge, `v1.0.0` étant immuable, le
+rollback consiste donc à **supprimer** le tag flottant — `git push origin :refs/tags/v1`
+— et non à le déplacer.
 
 ## Pourquoi ce lot existe
 
@@ -30,11 +60,14 @@ où le dépôt est cassé, la convention de tags, et le rollback.
 
 ## État de départ, vérifié
 
-`git tag` est **vide**. Aucune version n'a jamais été publiée, donc :
+`git tag` était **vide** au départ. Aucune version n'avait jamais été publiée, donc :
 
 - **aucun utilisateur à migrer** — c'est ce qui autorise à casser l'action pendant huit
   lots et à ignorer toute rétrocompatibilité ;
 - aucune contrainte de nommage héritée.
+
+Cette liberté est **terminée** depuis le 2026-08-20 : `v1.0.0` et `v1` sont publiés, et
+un consommateur peut les avoir épinglés.
 
 Le remote est `citopia-jvs/deepseek-resolve-github-action`.
 
@@ -129,8 +162,13 @@ fait la différence entre une version relue et un déplacement de pointeur. `v1`
 
 ## Vérification
 
-- `git tag` montre `v1` et `v1.0.0` pointant le même commit.
-- Un dépôt de test consommant `@v1` fonctionne, et un autre consommant `@v1.0.0` aussi.
+- **Fait** le 2026-08-20 : `git tag` montre `v1` et `v1.0.0` pointant le même commit.
+  `git ls-remote --tags origin` rend `3de6dd4` pour `refs/tags/v1` comme pour
+  `refs/tags/v1.0.0^{}`.
+- **Pas fait** : un dépôt de test consommant `@v1` fonctionne, et un autre consommant
+  `@v1.0.0` aussi. Ce qui a été vérifié à la place est strictement plus faible — que
+  l'API `contents` serve bien `action.yml` et `scripts/` aux deux refs. Cela ne dit rien
+  du montage de l'action par un runner, ni de son exécution.
 
 **Ce bloc s'attribuait une couverture inexistante.** Il renvoyait au « job 5 de la CI,
 avec un SHA plutôt qu'un tag ». Mesuré : aucun des quatre jobs ne consomme un tag, un

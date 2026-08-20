@@ -78,7 +78,7 @@ recontrôlé lors de la révision du plan ; les dates comptent.
 | Une PR créée avec `GITHUB_TOKEN` produit un run `pull_request` en état « approval required » pour `opened`/`synchronize`/`reopened` uniquement. **Tout autre événement ne produit aucun run** — une CI sur `on: push` ne démarre pas du tout, sans bandeau ni bouton | doc GITHUB_TOKEN |
 | `author_association` n'est **pas** une permission : `MEMBER` = membre de l'organisation propriétaire, sans accès garanti au dépôt ; `COLLABORATOR` inclut `read` et `triage`. Et GitHub ne renvoie qu'**une seule** valeur, donc un membre ayant déjà commité est rapporté `CONTRIBUTOR` | enum GraphQL `CommentAuthorAssociation` + actions/github-script#643 |
 | `git rev-list --count <base>..HEAD` est exact dans un clone `--depth=1`, et `git push` depuis un clone shallow passe | reproduit en local |
-| Ce dépôt n'a **aucun tag** : `git tag` est vide. Donc aucun utilisateur à migrer | `git tag` |
+| Ce dépôt n'avait **aucun tag** pendant les huit lots, donc aucun utilisateur à migrer. `v1.0.0` (annoté) et `v1` (léger) ont été posés sur `3de6dd4` le 2026-08-20 : cette liberté est terminée | `git ls-remote --tags origin` |
 | Le remote est `citopia-jvs/deepseek-resolve-github-action` | `git remote -v` |
 
 ## Risques
@@ -304,10 +304,13 @@ c'était déjà vrai avant.
 ## État intermédiaire cassé — travailler sur une branche
 
 Entre le lot 0 et le lot 4, `action.yml` déclare `main: src/index.js` sur un fichier
-supprimé : l'action est totalement inutilisable. Comme il n'existe **aucun tag**,
-personne ne consomme ce dépôt et il n'y a aucune conséquence externe. Travailler
-malgré tout sur `feat/composite-aider`, fusionnée après le lot 5 vert : c'est ce qui
-permet à la CI du lot 5 de tourner sur une PR avant d'atterrir sur `main`.
+supprimé : l'action est totalement inutilisable. Il n'existait alors **aucun tag**,
+donc personne ne consommait ce dépôt et il n'y avait aucune conséquence externe.
+Travailler malgré tout sur `feat/composite-aider`, fusionnée après le lot 5 vert :
+c'est ce qui permet à la CI du lot 5 de tourner sur une PR avant d'atterrir sur
+`main`. Fait — PR #1 fusionnée en squash le 2026-08-20, puis `v1.0.0` et `v1` posés
+sur le commit correspondant. Cet argument ne pourra plus être réutilisé tel quel : un
+consommateur peut désormais avoir épinglé `@v1`.
 
 ## Vérification de bout en bout
 
