@@ -277,13 +277,15 @@ function remoteOrigineExiste() {
  * hors ligne.
  *
  * @param {Readonly<object>} config
+ * @param {ReadonlyArray<string>} prefixeAuth arguments d'authentification, placés
+ *   avant `fetch` : sans eux, `persist-credentials: false` rend ce fetch impossible.
  * @returns {{ nom: string, reference: string }} `nom` pour `gh pr create --base`,
  *   `reference` pour créer la branche de travail.
  */
-function resoudreBase(config) {
+function resoudreBase(config, prefixeAuth) {
   if (config.brancheBase !== '') {
     if (remoteOrigineExiste()) {
-      git(['fetch', '--depth=1', 'origin', config.brancheBase]);
+      git([...prefixeAuth, 'fetch', '--depth=1', 'origin', config.brancheBase]);
       return { nom: config.brancheBase, reference: `origin/${config.brancheBase}` };
     }
     if (!brancheLocaleExiste(config.brancheBase)) {
@@ -322,9 +324,11 @@ function resoudreBase(config) {
  *
  * @param {string} nom nom de branche issu de la garde, qui fait foi
  * @param {string} referenceBase
+ * @param {ReadonlyArray<string>} prefixeAuth arguments d'authentification, placés
+ *   avant `ls-remote` et avant `fetch`
  * @returns {'locale'|'distante'|false} origine de la reprise, `false` si créée
  */
-function etablirBrancheTravail(nom, referenceBase) {
+function etablirBrancheTravail(nom, referenceBase, prefixeAuth) {
   if (brancheLocaleExiste(nom)) {
     // Inatteignable sur un runner neuf ; possible en réexécution locale. On s'y
     // place sans rien réécrire : ni reset ni merge, pour ne pas détruire du
@@ -341,8 +345,8 @@ function etablirBrancheTravail(nom, referenceBase) {
     return false;
   }
 
-  if (brancheDistanteExiste(nom)) {
-    git(['fetch', '--depth=1', 'origin', `${nom}:refs/remotes/origin/${nom}`]);
+  if (brancheDistanteExiste(nom, prefixeAuth)) {
+    git([...prefixeAuth, 'fetch', '--depth=1', 'origin', `${nom}:refs/remotes/origin/${nom}`]);
     git(['switch', '-c', nom, `origin/${nom}`]);
     return 'distante';
   }
@@ -352,14 +356,25 @@ function etablirBrancheTravail(nom, referenceBase) {
 }
 
 /**
- * Construit le préfixe d'arguments qui authentifie le push — durcissement de R7.
+ * Construit le préfixe d'arguments qui authentifie les opérations distantes —
+ * durcissement de R7.
  *
- * Forme : `git -c http.extraheader="AUTHORIZATION: basic <base64>" push …`.
+ * Forme : `git -c http.extraheader="AUTHORIZATION: basic <base64>" <commande> …`.
  * L'action ne dépend donc pas de `persist-credentials`, que le lot 6
  * recommandera de mettre à `false` : avec le défaut `true`, le jeton en écriture
  * est écrit dans `.git/config` du checkout, donc lisible par n'importe quel code
  * exécuté là — y compris celui que le modèle vient d'écrire, un
  * `git credential fill` suffisant.
+ *
+ * **Ce préfixe va sur les TROIS commandes qui parlent au remote — `ls-remote`,
+ * `fetch`, `push` — et pas seulement sur le push.** Ne l'avoir mis que sur le
+ * push a été un vrai défaut, tenu pendant tout le développement parce qu'aucune
+ * suite hors ligne ne pouvait l'attraper : le premier déroulé sur un vrai runner
+ * est mort en `fatal: could not read Username for 'https://github.com'` sur le
+ * `ls-remote` de R9, avant même le premier appel à aider. Autrement dit,
+ * l'action ne démarrait pas dans la configuration que son propre README
+ * recommande. Ajouter une opération distante sans lui passer ce préfixe recrée
+ * exactement ce défaut.
  *
  * Le jeton est ici un ARGUMENT de ligne de commande. Deux conséquences tenues :
  * ce tableau n'est jamais journalisé, et `lib/git.js` masque son propre argv dans
@@ -393,7 +408,8 @@ function construirePrefixeAuthentification(jeton) {
  *     produit (comptage R4 du lot 3c) ;
  *   `branche` — branche de travail, celle de la garde ;
  *   `reprise` — `'locale'`, `'distante'` ou `false` ;
- *   `prefixeAuthentification` — arguments à placer AVANT `push` (lot 3b).
+ *   `prefixeAuthentification` — arguments à placer AVANT toute commande git qui
+ *     parle au remote : `ls-remote`, `fetch`, `push` (lot 3b).
  */
 function preparer(config) {
   // 1. Masquer, avant tout le reste : le masquage ne vaut que pour la suite.
@@ -405,8 +421,21 @@ function preparer(config) {
   // 2. Identité git — R1.
   configurerIdentiteGit();
 
-  // 3. Branche de base.
-  const base = resoudreBase(config);
+  // 3. Authentification des opérations distantes — R7. AVANT la résolution de la
+  //    base et l'établissement de la branche, et non après comme dans une version
+  //    antérieure : ces deux étapes font `fetch` et `ls-remote`, donc sans le
+  //    préfixe déjà construit ici, elles échouent sous
+  //    `persist-credentials: false`. C'est ce qui a tué le premier déroulé réel.
+  const prefixeAuthentification = construirePrefixeAuthentification(config.jetonGh);
+  if (prefixeAuthentification.length === 0 && !config.sansPublication) {
+    avertir(
+      'GH_TOKEN est absent : le push et les commentaires de PR échoueront. ' +
+        "Vérifier l'input github-token.",
+    );
+  }
+
+  // 4. Branche de base.
+  const base = resoudreBase(config, prefixeAuthentification);
 
   // La base ne peut pas être la branche de travail : le comptage
   // `<base>..HEAD` du lot 3c (R4) rendrait alors toujours zéro. N'arrive pas sur
@@ -419,28 +448,23 @@ function preparer(config) {
     );
   }
 
-  // 4. SHA de base, relevé sur la base RÉSOLUE et non sur HEAD : avec un
+  // 5. SHA de base, relevé sur la base RÉSOLUE et non sur HEAD : avec un
   //    `base-branch` différent du checkout, partir de HEAD donnerait un diff de
   //    PR faux. Et un SHA plutôt qu'un nom, parce qu'un nom de branche peut
   //    bouger sous nos pieds pendant le job.
   const shaBase = git(['rev-parse', '--verify', `${base.reference}^{commit}`]);
 
-  // 5. Créer ou reprendre la branche de travail — R9.
-  const reprise = etablirBrancheTravail(config.branche, base.reference);
+  // 6. Créer ou reprendre la branche de travail — R9.
+  const reprise = etablirBrancheTravail(
+    config.branche,
+    base.reference,
+    prefixeAuthentification,
+  );
 
-  // 6. SHA de départ, relevé APRÈS l'établissement de la branche. Distinct de
+  // 7. SHA de départ, relevé APRÈS l'établissement de la branche. Distinct de
   //    `shaBase` dès que la branche est reprise : voir « Pourquoi `shaDepart` en
   //    plus de `shaBase` » dans `plan/contrat.md`.
   const shaDepart = git(['rev-parse', '--verify', 'HEAD^{commit}']);
-
-  // 7. Authentification du push — R7.
-  const prefixeAuthentification = construirePrefixeAuthentification(config.jetonGh);
-  if (prefixeAuthentification.length === 0 && !config.sansPublication) {
-    avertir(
-      'GH_TOKEN est absent : le push et les commentaires de PR échoueront. ' +
-        "Vérifier l'input github-token.",
-    );
-  }
 
   return Object.freeze({
     nomBrancheBase: base.nom,

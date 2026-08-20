@@ -290,7 +290,11 @@ etatFichiers()                                     // [{ statut, chemin }] — p
                                                    // renommage ou copie : la destination garde le
                                                    // statut brut de git ('R ', 'RM', 'C '),
                                                    // l’origine porte la sentinelle 'R<'
-brancheDistanteExiste(nom)                         // booléen
+brancheDistanteExiste(nom, prefixeAuth = [])       // booléen
+                                                   // `prefixeAuth` va AVANT `ls-remote` : sous
+                                                   // `persist-credentials: false`, un `ls-remote`
+                                                   // nu sort en « could not read Username for
+                                                   // 'https://github.com' » — mesuré sur runner
 // chemins.js
 estCheminInterdit(chemin)                          // booléen — liste du lot 3b
                                                    // refuse aussi tout `.aider*` (nom ET premier
@@ -319,7 +323,7 @@ Les lots 3b et 3c le consomment sans le reconstruire. Il est gelé (`Object.free
 | `shaDepart` | SHA de `HEAD` **après** établissement de la branche de travail |
 | `branche` | nom de la branche de travail — vient de la sortie `branche` de la garde |
 | `reprise` | `'locale'` \| `'distante'` \| `false` |
-| `prefixeAuthentification` | arguments à placer avant `push`. **Jamais journalisé** |
+| `prefixeAuthentification` | arguments à placer avant **toute** commande git qui parle au remote — `ls-remote`, `fetch`, `push`. Construit avant la résolution de la base, qui en a besoin. **Jamais journalisé** |
 
 ### Pourquoi `shaDepart` en plus de `shaBase`
 

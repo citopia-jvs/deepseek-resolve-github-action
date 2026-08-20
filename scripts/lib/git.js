@@ -180,17 +180,32 @@ function etatFichiers() {
  * La branche existe-t-elle sur `origin` ? Traite R9 : sur un runner neuf il n'y a
  * aucune branche locale, donc `git switch -c` réussit et le push est rejeté en
  * non-fast-forward — après avoir tout consommé.
+ *
+ * `prefixeAuth` porte les arguments d'authentification, à placer AVANT
+ * `ls-remote`. Il n'est pas optionnel par confort : avec
+ * `persist-credentials: false` — la configuration que le README recommande — le
+ * checkout ne laisse aucune credential dans `.git/config`, et un `ls-remote` nu
+ * sort en `fatal: could not read Username for 'https://github.com'`. Mesuré sur
+ * un vrai runner. Le défaut vide reste pour les dépôts sans remote joignable
+ * (harnais de test hors ligne), pas pour les appels de production.
+ *
  * @param {string} nom
+ * @param {ReadonlyArray<string>} [prefixeAuth] arguments placés avant `ls-remote`
  * @returns {boolean}
  */
-function brancheDistanteExiste(nom) {
+function brancheDistanteExiste(nom, prefixeAuth = []) {
   if (typeof nom !== 'string' || nom.trim() === '' || nom.startsWith('-')) {
     throw new TypeError(
       `brancheDistanteExiste() attend un nom de branche non vide, reçu ${JSON.stringify(nom)}`,
     );
   }
+  if (!Array.isArray(prefixeAuth) || prefixeAuth.some((a) => typeof a !== 'string')) {
+    throw new TypeError(
+      'brancheDistanteExiste() attend un tableau de chaînes en second argument',
+    );
+  }
   const reference = `refs/heads/${nom}`;
-  const sortie = git(['ls-remote', '--heads', 'origin', reference]);
+  const sortie = git([...prefixeAuth, 'ls-remote', '--heads', 'origin', reference]);
   if (!sortie) return false;
   // `--heads <motif>` filtre par suffixe : on exige l'égalité exacte, sinon
   // `fix-issue-4` serait « trouvée » par `refs/heads/autre/fix-issue-4`.

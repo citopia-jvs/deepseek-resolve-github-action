@@ -256,6 +256,24 @@ Heures de débogage économisées ; aucun ne se devine à la lecture du code seu
   `estCheminInterdit('sous/')` rend `true`. Ne pas retirer cette garde comme
   redondante avec `-uall` : `git add` sur un dépôt imbriqué enregistrerait un gitlink
   vers un commit absent.
+- **Les TROIS commandes git distantes portent le préfixe d'authentification, pas
+  seulement le push.** `construirePrefixeAuthentification()` sert à `ls-remote`
+  (`scripts/lib/git.js`, R9), aux deux `fetch` de `resoudreBase` et
+  `etablirBrancheTravail`, et au `push` de `pousser`. D'où l'ordre des étapes de
+  `preparer()` : le préfixe est construit **avant** la résolution de la base, parce
+  que les étapes suivantes en ont besoin. N'avoir authentifié que le push a été un
+  vrai défaut, tenu jusqu'au premier déroulé sur un runner : sous
+  `persist-credentials: false` — la configuration que le README recommande — le
+  `ls-remote` sortait en `fatal: could not read Username for 'https://github.com'`
+  et le job mourait avant le premier appel à aider. **Les sept suites étaient
+  vertes**, et elles ne pouvaient pas ne pas l'être : les dépôts jetables du
+  harnais ont un `origine` local, joignable sans jeton. C'est pour ça que le cas
+  qui ferme ce trou (`test/boucle.test.js`, « R7 — tout appel git distant porte le
+  préfixe ») est un **lecteur statique de source** et non une exécution. Il
+  reconnaît deux formes de tableau — l'appel inline `git([...prefixeAuth, 'fetch',
+  …])` et le tableau nommé `const argumentsPush = [...]` de `pousser()` — et un
+  second cas exige d'en trouver au moins quatre, pour qu'un changement de forme le
+  fasse rougir au lieu de le rendre vert et muet.
 - **Le `GITHUB_TOKEN` n'a pas le droit « workflows ».** Toute écriture sous
   `.github/workflows/**` fait échouer le **push**, et le refus porte sur les commits
   poussés, pas sur l'état final de la branche : restaurer le fichier au tour suivant ne
