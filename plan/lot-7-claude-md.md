@@ -44,10 +44,33 @@ pas à exister.
 Ni dépendances, ni build, ni linter installé.
 
 ```bash
-find scripts test -name '*.js' -exec node --check {} \;
-node test/garde.test.js      # GH_CLI stubé, aucun réseau
-node test/boucle.test.js     # AIDER_CLI + GH_CLI stubés, aucune clé API
+find scripts test -name '*.js' -print0 | xargs -0 -n1 node --check
+for suite in test/*.test.js; do node "$suite"; done   # hors ligne, sans clé API
 ```
+
+**Cinq corrections à ce bloc et à ce qui suit, mesurées aux lots 5 et 6.** Un
+`CLAUDE.md` faux coûte plus cher qu'un `CLAUDE.md` absent — c'est l'argument même de ce
+lot, il s'applique d'abord à lui :
+
+1. la forme `-exec node --check {} \;` rend **0 même sur un script cassé** : un code non
+   nul de l'utilitaire lancé par `-exec … ;` n'est pas une erreur pour `find`. `-exec … +`
+   ne vaut pas mieux, `node --check bon.js casse.js` rendant 0. Seule la forme `xargs -0
+   -n1` propage. Écrire l'ancienne apprendrait à un agent un contrôle qui ne peut pas
+   échouer, et contredirait `.github/workflows/test.yml` ;
+2. les suites sont **sept**, pas deux : `chemins`, `texte`, `garde`, `boucle`, `action`,
+   `compte-rendu`, `ci`. Les lancer par un **glob** et non par une liste — une suite
+   ajoutée est lancée sans que personne y pense, et une liste nommée dans `CLAUDE.md`
+   sera périmée au lot suivant. Ne pas y porter de compte de cas, pour la même raison ;
+3. `action.yml` a **cinq** steps, pas quatre : garde, `setup-python`, installation
+   d'aider, résolution, compte rendu en `if: always()` ;
+4. il n'y a plus de « job 1 » ni de « job 5 » dans la CI. Les jobs sont `syntaxe`,
+   `suites`, `smoke-local` et `smoke-sous-repertoire`. Le contrôle de cohérence
+   `inputs:` ↔ `${{ inputs.* }}` est livré par `test/action.test.js`, lancé par le job
+   `suites` — pas par un contrôle Python, retiré au lot 4 parce qu'il était inexécutable
+   et sortait en 0 sur une différence ;
+5. le chemin relatif est attrapé par **`smoke-sous-repertoire`**, pas par le smoke local :
+   en `uses: ./`, `GITHUB_ACTION_PATH` vaut `GITHUB_WORKSPACE`, donc un chemin relatif y
+   passe. C'est toute la raison d'être du second job de smoke.
 
 Préciser que `validation-command` (défaut `npm test`) s'applique au dépôt
 **consommateur**, pas à celui-ci. C'est une confusion que l'ancien `CLAUDE.md` signalait
@@ -56,7 +79,7 @@ déjà et qui reste pertinente.
 ### Architecture
 
 ```
-action.yml                # using: composite, 4 steps, 13 inputs, 5 outputs
+action.yml                # using: composite, 5 steps, 13 inputs, 5 outputs
 aider.conf.yml            # config d'aider, maîtrisée par l'action
 aider-models.json         # métadonnées des modèles DeepSeek V4
 scripts/garde.js          # événement, autorisation, anti-rejeu — avant l'install d'aider
@@ -64,7 +87,7 @@ scripts/resolve.js        # préparation, primitives, orchestration
 scripts/rendre-compte.js  # step if: always()
 scripts/lib/              # gh, git, chemins, texte — stdlib seule
 __fixtures__/             # payloads + stubs gh et aider
-test/                     # garde.test.js, boucle.test.js
+test/                     # sept suites, lancées par un glob
 ```
 
 Contraintes à consigner, parce qu'elles ne se déduisent pas du code :
@@ -75,12 +98,13 @@ Contraintes à consigner, parce qu'elles ne se déduisent pas du code :
 - **Les inputs d'une composite ne sont pas exposés en `INPUT_*`** aux sous-processus.
   Toute valeur lue par un script doit figurer dans le `env:` de son step. C'est l'oubli
   le plus probable lors de l'ajout d'un input, et une faute de frappe dans
-  `${{ inputs.* }}` s'évalue en chaîne vide **sans erreur**. Le contrôle de cohérence du
-  job 1 de la CI existe pour ça.
+  `${{ inputs.* }}` s'évalue en chaîne vide **sans erreur**. `test/action.test.js` existe
+  pour ça, et le job `suites` de la CI le lance.
 - **`$GITHUB_ACTION_PATH`** pour atteindre les scripts embarqués — jamais un chemin
   relatif. Attention : sa valeur vaut `GITHUB_WORKSPACE` quand l'action est référencée en
   `uses: ./`, et `_actions/<owner>/<repo>/<ref>` sinon. Un chemin relatif passe donc la CI
-  locale et casse chez le consommateur. C'est le job 5 de la CI qui l'attrape.
+  locale et casse chez le consommateur. C'est le job `smoke-sous-repertoire` de la CI qui
+  l'attrape — pas `smoke-local`, où la variable vaut justement le workspace.
 - **La garde tourne avant l'installation d'aider**, volontairement : `pipx install`
   installe 107 paquets et prend plus d'une minute.
 - **Une composite action n'a ni `timeout-minutes`, ni `concurrency`, ni `pre:`/`post:`.**
@@ -94,8 +118,8 @@ Tous relevés dans la source ou le wheel, avec la référence.
 
 - **`aider-chat` est figé à `0.86.2` (2026-02-12)** et épingle `litellm==1.81.10`, dont la
   table de modèles ne contient **aucun** modèle DeepSeek V4. Le `model-metadata.json`
-  d'aider ne connaît côté DeepSeek que `deepseek-chat` et `deepseek-reasoner`, **retirés
-  de l'API le 2026-07-24**. Il n'existe donc aucun modèle valide qu'aider connaisse d'un
+  d'aider ne connaît côté DeepSeek que `deepseek-chat` et `deepseek-reasoner`, **inaccessibles depuis le
+  2026-07-24 15:59 UTC**. Il n'existe donc aucun modèle valide qu'aider connaisse d'un
   bloc : d'où `aider-models.json` embarqué et `--model-metadata-file`. Monter
   `aider-version` oblige à revérifier ce fichier.
 - aider lit `git config user.name` **hors** de son bloc `try` (`repo.py:291` contre
