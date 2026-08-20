@@ -85,9 +85,11 @@ jobs:
         run: |
           # Guillemets au niveau du SHELL, pas du YAML : dans `run: "$RUNNER_TEMP/…"`,
           # les guillemets appartiennent au scalaire YAML et le shell reçoit une
-          # expansion nue. Mesuré au premier run réel de cette CI — actionlint y trouve
-          # shellcheck, absent du poste de développement, et rend
-          # « SC2086 Double quote to prevent globbing and word splitting ».
+          # expansion nue — SC2086, relevé au premier run réel de cette CI. Le poste de
+          # développement n'a pas l'outil que actionlint appelle ici, et saute donc ce
+          # contrôle en silence : un vert local est plus faible qu'un vert en CI.
+          # Et ne pas commencer une ligne de commentaire par le nom de cet outil :
+          # elle serait lue comme une directive, et refusée (SC1073).
           "$RUNNER_TEMP/actionlint"
 
   suites:
