@@ -62,7 +62,7 @@ recontrôlé lors de la révision du plan ; les dates comptent.
 | Fait | Comment il a été vérifié |
 | --- | --- |
 | `aider-chat` dernière version = **0.86.2**, publiée **2026-02-12**. 174 releases, rien depuis six mois | `pypi.org/pypi/aider-chat/json` |
-| `aider-chat 0.86.2` déclare `requires_python = "<3.13,>=3.10"` et épingle ses **301** dépendances en `==`, dont `litellm==1.81.10` | idem |
+| `aider-chat 0.86.2` déclare `requires_python = "<3.13,>=3.10"` et épingle ses dépendances en `==`, dont `litellm==1.81.10` | idem |
 | **`litellm 1.81.10` ne connaît aucun modèle DeepSeek V4** : sa table ne contient que `deepseek-chat`, `deepseek-reasoner`, `deepseek-coder`, `deepseek-r1`, `deepseek-v3`, `deepseek-v3.2` | wheel `litellm-1.81.10-py3-none-any.whl`, `model_prices_and_context_window_backup.json` |
 | `aider/resources/model-metadata.json` de 0.86.2 ne déclare côté DeepSeek que `deepseek/deepseek-reasoner` et `deepseek/deepseek-chat` | wheel `aider_chat-0.86.2-py3-none-any.whl` |
 | **`deepseek-chat` et `deepseek-reasoner` sont retirés depuis le 2026-07-24.** L'API n'expose plus que `deepseek-v4-flash` (V4-Flash-0731) et `deepseek-v4-pro` (V4-Pro-0813), 1 M de contexte, 384 K de sortie max | `api-docs.deepseek.com/updates/` et `/quick_start/pricing` |
@@ -411,7 +411,7 @@ Il n'en reste qu'un. Les trois précédents sont clos :
 
 **Reste ouvert** : faut-il installer aider par `pipx install "aider-chat==0.86.2"`
 ou par un venv et `pip install --require-hashes -r aider-lock.txt` ? L'épinglage de
-version est plus fort que le plan précédent ne le croyait — aider épingle ses 301
+version est plus fort que le plan précédent ne le croyait — aider épingle ses
 dépendances en `==`, et PyPI interdit la réutilisation d'un nom de fichier. Le
 verrou hashé ne couvre qu'une compromission d'index ou de miroir, au prix d'un
 fichier à régénérer à chaque montée de version. Tranché au lot 4, à l'implémentation.

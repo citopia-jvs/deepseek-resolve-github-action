@@ -66,7 +66,7 @@ cache le SHA.
 
 `aider-version` est épinglé en dur dans `action.yml`. Le changer :
 
-- installe 301 paquets tiers différents dans le runner de chaque consommateur ;
+- installe 107 paquets tiers différents dans le runner de chaque consommateur ;
 - oblige à revérifier `aider-models.json` : c'est la version d'aider qui détermine quelle
   table de modèles litellm est embarquée, et donc si les modèles DeepSeek courants sont
   connus (R5) ;

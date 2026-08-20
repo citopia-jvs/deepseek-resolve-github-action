@@ -280,7 +280,7 @@ d'une composite dans un job déjà rouge. C'est un comportement du runner, pas n
 Ce que ce job aurait coûté, pour mémoire : faire passer la garde en CI demande de
 surcharger `GITHUB_EVENT_NAME` et `GITHUB_EVENT_PATH` par l'`env:` du job — faisable,
 `CompositeActionHandler.cs:259-263` fusionne bien l'environnement global dans chaque step
-embarqué — puis de laisser la composite installer Python et les 301 paquets d'aider, puis
+embarqué — puis de laisser la composite installer Python et les 107 paquets d'aider, puis
 de faire remonter le verdict d'un job **volontairement rouge** vers un second job par
 `needs`, `continue-on-error` et des sorties de job. Beaucoup de machinerie fragile pour
 une variable que le runner documente dans son code.

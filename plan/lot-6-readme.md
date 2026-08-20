@@ -155,11 +155,38 @@ cachés sont retirés, et le prompt exact est publié dans la PR pour que le rel
 le texte injecté. **Aucune de ces mesures n'est une barrière** — elles réduisent la
 probabilité, jamais la possibilité.
 
+**Ce paragraphe est FAUX deux fois — lire la section qui le suit avant de le recopier.**
+
 Ne pas ajouter `CONTRIBUTOR` à `allowed-associations`. GitHub ne renvoie qu'une seule
 association, donc un mainteneur légitime qui a déjà commité est rapporté `CONTRIBUTOR` et
 se fait refuser à l'étage 1. Le réflexe naturel est d'élargir la liste — et la porte
 s'ouvre alors à quiconque a fait fusionner une correction de faute de frappe. La bonne
 réponse à ce symptôme est l'étage 2, qui est déjà là.
+
+### Ce paragraphe est faux deux fois, et le README ne doit pas le recopier
+
+Corrigé au lot 6, en lisant `scripts/garde.js`. La rédactrice avait suivi le plan à la
+lettre, et le relecteur a attrapé les deux erreurs.
+
+**Les deux étages sont un ET, pas un repli.** `scripts/garde.js:388-394` appelle
+`refuser(…)` dès que l'association n'est pas dans la liste, ce qui écrit
+`poursuivre=false` et sort : l'étage 2, dont le commentaire du code dit lui-même
+« obligatoire », n'est **jamais atteint**. Donc « la bonne réponse est l'étage 2, qui est
+déjà là » envoie le lecteur dans une impasse : son mainteneur reste bloqué quoi qu'il
+fasse, même avec les pleins droits sur le dépôt.
+
+**Et le risque annoncé n'existe pas.** Puisque l'étage 2 est exigé de toute façon,
+ajouter `CONTRIBUTOR` n'ouvre pas la porte « à quiconque a fait fusionner une correction
+de faute de frappe » : cette personne est rapportée `CONTRIBUTOR` **et** n'a que la
+permission `read`, donc l'étage 2 la refuse (`garde.js:407-412`, `write`, `maintain` ou
+`admin` exigées). Ce qu'on élargit en ajoutant `CONTRIBUTOR`, c'est le premier filtre,
+pas la porte.
+
+Ce que le README doit donc dire : les deux étages sont cumulatifs ; un refus à l'étage 1
+est définitif ; ajouter `CONTRIBUTOR` est le **seul** moyen de débloquer ce mainteneur ;
+et c'est défendable parce que l'étage 2 continue de filtrer. Avec la réserve qui va avec :
+l'étage 1 est gratuit et non falsifiable, l'étage 2 dépend d'un appel à l'API qui peut
+échouer — et dans ce cas l'action refuse.
 
 #### Consignes fermes
 
@@ -255,7 +282,7 @@ n'est atténué.
   (défaut de `--git-commit-verify`), et l'action fait de même. Un `pre-commit` qui lint ou
   qui cherche des secrets ne s'exécute pas sur ces commits.
 
-- **Changer `aider-version` installe 301 paquets tiers** dans votre runner. C'est un
+- **Changer `aider-version` installe 107 paquets tiers** dans votre runner. C'est un
   changement de sécurité, pas une mise à jour de routine.
 
 - **Une seule PR par issue.** Un `@dseek` sur une issue qui a déjà une PR ouverte ne fait
@@ -271,11 +298,20 @@ n'est atténué.
   `payload.action` en dur dans le script vieillirait moins bien que la déclaration du
   workflow.
 
-- **Une branche `fix-issue-<n>` force-poussée à la main entre deux runs bloque la
-  reprise.** L'action rapatrie la branche existante sans forcer, délibérément : elle
-  échoue en non-fast-forward plutôt que d'écraser en silence le travail poussé par
-  quelqu'un d'autre. Supprimer la branche, ou fermer et rouvrir l'issue avec une
-  branche propre.
+- **Un force-push pendant un run fait échouer l'action ; entre deux runs, il ne gêne
+  pas.** Cette limite était écrite à l'envers dans le plan, et le README l'a d'abord
+  recopiée. Mesuré au lot 6 sur un dépôt jetable, distant nu compris : un runner neuf
+  n'a **aucune** ref `refs/remotes/origin/fix-issue-<n>` — `actions/checkout` ne
+  rapatrie que la ref déclenchante — donc le `git fetch` de la reprise **crée** cette
+  ref, il n'y a rien à forcer. `--preparer-seulement` rend « reprise (branche distante
+  préexistante) », code 0, `HEAD` sur le commit de l'humain, et le push suivant est un
+  fast-forward accepté (`91abe0d..ae41ce4`, code 0). Le remède conseillé — supprimer la
+  branche — était inutile.
+
+  La vraie limite est le force-push **pendant** le run : mesuré, le push simple est
+  refusé en non-fast-forward, puis le `--force-with-lease` est rejeté en `stale info`,
+  et l'action tombe en panne. C'est le comportement voulu — jamais `--force` — mais
+  c'est ça qu'il faut documenter.
 
 - **`ubuntu-24.04` requis.** Sur un runner auto-hébergé, macOS ou Windows, `pipx` peut
   être absent ; l'action le signale explicitement.
@@ -286,18 +322,34 @@ Remplacer entièrement l'ancienne section. Plus de `npm install`, plus de dépen
 plus de build.
 
 ```bash
-# syntaxe
-find scripts test -name '*.js' -exec node --check {} \;
+# syntaxe — un appel par fichier
+find scripts test -name '*.js' -print0 | xargs -0 -n1 node --check
 
-# la garde, sans réseau ni token
-node test/garde.test.js
-
-# la boucle, sans clé API
-node test/boucle.test.js
+# les sept suites, hors ligne, sans clé API ni réseau
+for suite in test/*.test.js; do node "$suite"; done
 ```
 
+**La forme `-exec` est proscrite, et c'est la correction la plus importante de ce lot.**
+Ce bloc portait `find scripts test -name '*.js' -exec node --check {} \;`. Mesuré au
+lot 5 : cette forme rend **0** même sur un script cassé, un code non nul de l'utilitaire
+lancé par `-exec … ;` n'étant pas une erreur pour `find`. `-exec … +` ne vaut pas mieux :
+`node --check bon.js casse.js` rend 0, `node --check` ne lisant que son premier argument.
+Un README qui apprend cette commande apprend un contrôle qui ne peut pas échouer — et le
+`.github/workflows/test.yml` du dépôt, lui, utilise la forme `xargs`. Les deux doivent
+dire la même chose.
+
+Les suites sont lancées par un **glob** et non par une liste, pour la même raison qu'au
+lot 5 : une suite ajoutée est lancée sans que personne y pense. Les nommer une par une
+dans le README, c'est garantir que la liste sera périmée au lot suivant. Elles sont sept
+et donnent 206 cas ; le README n'a pas à porter ces nombres, qui vieillissent à chaque
+lot — le glob et le nom du répertoire suffisent.
+
+Mentionner aussi `actionlint`, que la CI installe avec un condensat épinglé, et qu'il ne
+faut **jamais** lancer sur `action.yml` : mesuré, il le lit comme un workflow et rend huit
+erreurs absurdes.
+
 Et le tableau de structure : `action.yml`, `aider.conf.yml`, `aider-models.json`,
-`scripts/`, `__fixtures__/`, `test/`.
+`scripts/`, `__fixtures__/`, `test/`, `.github/workflows/test.yml`, `plan/`.
 
 ## Vérification
 

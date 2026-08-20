@@ -14,7 +14,7 @@ inputs:
     required: false
     default: ${{ github.token }}
   max-iterations:
-    description: "Nombre maximum de tours réflexion / correction / validation."
+    description: "Nombre maximum de tours : un appel à aider, puis la commande de validation."
     required: false
     default: "2"
   validation-command:
@@ -26,15 +26,16 @@ inputs:
     required: false
     default: ""
   model:
-    # `deepseek-chat` et `deepseek-reasoner` sont retirés de l'API depuis le
-    # 2026-07-24 : seuls `deepseek-v4-pro` et `deepseek-v4-flash` répondent encore.
+    # `deepseek-chat` et `deepseek-reasoner` sont inaccessibles depuis le
+    # 2026-07-24 15:59 UTC : seuls `deepseek-v4-pro` et `deepseek-v4-flash`
+    # répondent encore. Heure relevée à la source au lot 6.
     description: "Modèle passé à aider, au format LiteLLM."
     required: false
     default: "deepseek/deepseek-v4-pro"
   aider-version:
     # Version en dur et non « latest » : une action publiée ne doit pas installer
     # une version mouvante. Monter cette valeur oblige à revérifier
-    # `aider-models.json` (R5), et installe 301 paquets tiers dans le runner.
+    # `aider-models.json` (R5), et installe 107 paquets tiers dans le runner.
     description: "Version d'aider-chat installée par l'action."
     required: false
     default: "0.86.2"
@@ -116,7 +117,7 @@ runs:
       shell: bash
       # `pipx install "aider-chat==<version>"` épingle en réalité tout l'arbre :
       # aider déclare ses dépendances en `==`. On s'en tient donc à pipx plutôt
-      # qu'à un verrou hashé, dont les 301 lignes seraient à régénérer à chaque
+      # qu'à un verrou hashé, dont les 108 lignes seraient à régénérer à chaque
       # montée de version sans qu'aucun hash ne soit exigé.
       run: |
         # Les images Ubuntu embarquent déjà pipx ; ce contrôle sert aux runners

@@ -180,7 +180,7 @@ rendu, ne rien republier. Lire `STATUT_JOB` et le dernier commentaire de la PR.
    consommateur. Toujours passer par `$GITHUB_ACTION_PATH`, jamais par un chemin relatif.
 
 3. **La garde tourne avant l'installation d'aider.** `pipx install aider-chat` installe
-   301 paquets et prend plus d'une minute. La faire dépendre de
+   107 paquets et prend plus d'une minute. La faire dépendre de
    `steps.garde.outputs.poursuivre` évite de la payer à chaque commentaire d'issue anodin
    — l'immense majorité des déclenchements.
 
@@ -194,7 +194,7 @@ ignore (R5).
 ## Point ouvert : `pipx` ou verrou hashé
 
 `pipx install "aider-chat==0.86.2"` épingle en réalité **tout l'arbre** : aider déclare
-ses 301 dépendances en `==`, et PyPI interdit la réutilisation d'un nom de fichier. C'est
+ses dépendances en `==`, et PyPI interdit la réutilisation d'un nom de fichier. C'est
 plus fort que la version précédente ne le croyait.
 
 Résidu : aucun hash, donc pas de protection contre une compromission d'index ou de
@@ -204,7 +204,7 @@ miroir, et `pipx install` exécute les backends de build des sdists — du code 
 L'alternative est un `python -m venv` plus
 `pip install --require-hashes -r "$GITHUB_ACTION_PATH/aider-lock.txt"`, au prix d'un
 fichier à régénérer à chaque montée de version. Trancher à l'implémentation. Dans les
-deux cas, documenter au lot 6 : changer `aider-version` installe 301 paquets tiers dans
+deux cas, documenter au lot 6 : changer `aider-version` installe 107 paquets tiers dans
 le runner du consommateur.
 
 ## Vérification

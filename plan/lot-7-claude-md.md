@@ -82,7 +82,7 @@ Contraintes à consigner, parce qu'elles ne se déduisent pas du code :
   `uses: ./`, et `_actions/<owner>/<repo>/<ref>` sinon. Un chemin relatif passe donc la CI
   locale et casse chez le consommateur. C'est le job 5 de la CI qui l'attrape.
 - **La garde tourne avant l'installation d'aider**, volontairement : `pipx install`
-  installe 301 paquets et prend plus d'une minute.
+  installe 107 paquets et prend plus d'une minute.
 - **Une composite action n'a ni `timeout-minutes`, ni `concurrency`, ni `pre:`/`post:`.**
   Le compte rendu en cas d'échec passe donc par un step `if: always()`, et la concurrence
   est prescrite au workflow consommateur.

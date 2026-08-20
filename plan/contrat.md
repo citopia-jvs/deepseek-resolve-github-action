@@ -15,7 +15,7 @@ Ces valeurs ne sont pas des points ouverts. Elles sont relevées et vérifiées.
 
 | Quoi | Valeur | Pourquoi cette valeur |
 | --- | --- | --- |
-| `aider-chat` | `0.86.2` | dernière version sur PyPI (2026-02-12). 174 releases, rien depuis. |
+| `aider-chat` | `0.86.2` | dernière version sur PyPI (2026-02-12). 174 releases, rien depuis. Sa résolution amène **108 paquets** — 107 tiers plus aider-chat lui-même. Mesuré au lot 6 dans `docker run --platform linux/amd64 python:3.12-slim`, par `pip install --dry-run --report`, l'architecture du runner. Le plan écrivait **301** depuis le lot 4, sans mesure : le chiffre partait dans le README, donc chez l'utilisateur. |
 | Python | `3.12` | `aider-chat` déclare `requires_python = "<3.13,>=3.10"`. |
 | Modèle par défaut | `deepseek/deepseek-v4-pro` | seuls `deepseek-v4-pro` et `deepseek-v4-flash` existent côté API. |
 | `actions/checkout` | `v5` | `v4` déclare `using: node20`, retiré des runners le 2026-09-16. Mesuré : `v5` déclare `using: node24`. |
@@ -23,6 +23,23 @@ Ces valeurs ne sont pas des points ouverts. Elles sont relevées et vérifiées.
 | Runner | `ubuntu-24.04` **en dur** | `ubuntu-latest` basculera sur 26.04, dont le Python 3.14.4 est hors borne. |
 | `actionlint` | `1.7.12`, archive `actionlint_1.7.12_linux_amd64.tar.gz`, SHA-256 `8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8` | ajouté au lot 5. Dernière version publiée (2026-03-30). Installé par téléchargement de l'archive **et contrôle du condensat**, pas par une action tierce : mesuré, `rhysd/actionlint` ne publie **pas** d'`action.yml` — `https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/action.yml` rend 404, donc le `uses: rhysd/actionlint@…` que proposait le lot 5 n'existe pas. |
 | Node | **non épinglé**, celui de l'image du runner | décidé au lot 5. L'action n'installe pas Node : elle appelle `node` tel que l'image du runner le fournit, chez le consommateur comme chez nous. Ajouter `actions/setup-node` à la CI ferait passer les suites sur un Node que l'action ne rencontre jamais, et masquerait le jour où l'image change de version majeure. Le job de syntaxe journalise `node --version` pour que la valeur du run soit au dossier. |
+
+## Nom du dépôt et référence publiée
+
+Figés **ici** au lot 6, parce que le README (lot 6), le `CLAUDE.md` (lot 7) et la
+convention de tags (lot 8) écrivent tous les trois cette chaîne, et qu'une version
+précédente du plan portait `<owner>/deepseek-resolve` dans son exemple copiable — un
+agent sans contexte l'aurait recopiée telle quelle.
+
+| Quoi | Valeur | Source |
+| --- | --- | --- |
+| Dépôt | `citopia-jvs/deepseek-resolve-github-action` | relevé sur `git remote get-url origin` : `git@github-pro:citopia-jvs/deepseek-resolve-github-action.git`. L'alias `github-pro` est un `Host` SSH du poste, pas le nom du dépôt |
+| Référence dans un exemple copiable | `@v1` | tag flottant du lot 8, déplacé sur le dernier `v1.x.y` vert. Un exemple qui montrerait `@main` apprendrait à consommer une branche mouvante |
+| Tag immuable | `v1.0.0` | jamais déplacé, pour le consommateur qui veut exactement ce qu'il a relu |
+
+`git tag` est **vide** aujourd'hui : `@v1` n'existe pas encore. Le README l'écrit quand
+même — c'est la référence que le lot 8 créera, et publier un README qui documente `@main`
+obligerait à le réécrire au premier tag.
 
 ## Sorties de `scripts/garde.js` (dans `GITHUB_OUTPUT`)
 
