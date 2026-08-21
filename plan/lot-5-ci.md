@@ -274,8 +274,10 @@ mesurer une variable :
   **le `JobContext` du job**.
 
 Le détail est dans « Ce que vaut `${{ job.status }}` dans une composite action » du
-contrat, avec ce qui reste non prouvé : que le runner exécute bien un step `if: always()`
-d'une composite dans un job déjà rouge. C'est un comportement du runner, pas notre code.
+contrat. Ce paragraphe y laissait un point non prouvé — que le runner exécute bien un
+step `if: always()` d'une composite dans un job déjà rouge. **Il l'est depuis : run
+32462323017, le step tourne et publie.** Mesuré à la main sur un dépôt d'essai, faute
+du job de CI auquel cette section a renoncé.
 
 Ce que ce job aurait coûté, pour mémoire : faire passer la garde en CI demande de
 surcharger `GITHUB_EVENT_NAME` et `GITHUB_EVENT_PATH` par l'`env:` du job — faisable,

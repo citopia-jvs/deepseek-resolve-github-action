@@ -190,6 +190,15 @@ deux formes (`porteeDuRun()`, `marqueurCompteRendu()` dans `scripts/resolve.js` 
 `scripts/rendre-compte.js`) — sans quoi une relance de job republierait le compte rendu
 du run précédent, ou l'inverse : le tairait à tort.
 
+Le filet a été mesuré de bout en bout, faute d'un test qui puisse le faire : run
+`32462323017`, `resolve.js` tué avant toute pull request par un `base-branch`
+inexistant. Job rouge, **un** commentaire de secours publié sur l'issue, et zéro
+occurrence de `STATUT_JOB` dans le log. Ce run établit aussi qu'un step `if: always()`
+d'une composite s'exécute **jusqu'au bout** dans un job déjà rouge, ce qui n'était que
+supposé. Le silence, lui, est mesuré par le run `32462525547`. Ce que les suites ne
+pourront jamais couvrir : elles lancent `rendre-compte.js` avec un environnement
+construit de zéro, donc ne voient jamais ce qu'un step de composite reçoit.
+
 Leçon de méthode, pour tout agent qui serait tenté de trancher un point du runner en
 lisant `actions/runner` plutôt qu'en le mesurant : **une lecture du code du runner ne
 remplace pas une mesure sur le runner.** C'est ce raccourci qui a fait renoncer, au

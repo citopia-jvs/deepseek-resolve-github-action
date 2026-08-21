@@ -161,12 +161,31 @@ marqueur (`porteeDuRun()`, `marqueurCompteRendu()`). Ce critère vit dans du cod
 `test/compte-rendu.test.js` exerce en sous-processus, et non dans une expression du
 YAML que `test/action.test.js` ne peut que comparer à une chaîne littérale.
 
-Reste non prouvé, et il faut le dire : que le runner exécute un step `if: always()`
-d'une composite **jusqu'au bout** dans un job déjà rouge. Le run ci-dessus rend le
-démarrage certain — le step a bien tourné — mais il s'est tu volontairement, donc la
-publication n'a jamais été observée. Aucun test hors ligne ne peut le mesurer : les
-suites lancent `rendre-compte.js` avec un environnement construit de zéro, elles ne
-voient jamais ce qu'un step de composite reçoit.
+**Un step `if: always()` d'une composite s'exécute bien JUSQU'AU BOUT dans un job déjà
+rouge — mesuré, run `32462323017`.** C'était le dernier point en suspens, et il portait
+les deux pistes : le run 32380365244 prouvait seulement le démarrage du step, qui s'était
+ensuite tu volontairement. Levé en faisant lever `resoudreBase()` par un `base-branch`
+inexistant : `resolve.js` meurt avant toute pull request et avant tout appel à aider, le
+job est rouge, et le filet publie bien **un** commentaire sur l'issue, portant
+`run=32462323017-1`. Le log ne contient **aucune** occurrence de `STATUT_JOB`.
+
+Le silence, lui, est mesuré par le run `32462525547` : clé DeepSeek invalide, aider sort
+non nul, la boucle publie son propre compte rendu, et le filet trouve le marqueur et ne
+publie rien. Ce run est ressorti **vert** et non rouge comme prévu — à noter, parce que
+la prévision inverse était fausse : `resolve.js` sort en 0 quand la boucle échoue
+légitimement, une résolution ratée étant un résultat et non une panne. Le seul chemin
+qui rougit le job est donc la panne, laquelle survient avant la publication de la boucle.
+
+Ce qui n'est toujours pas mesuré, et il faut le dire : la combinaison « job rouge **et**
+boucle ayant déjà publié ». Elle est peut-être quasi inatteignable pour la raison
+ci-dessus, mais ce n'est pas démontré. Elle importe peu : depuis ce lot, le statut du job
+n'est plus une entrée de la décision. Restent également non mesurés le job **annulé** et
+le **timeout** du workflow appelant — le texte du corps ne les distingue plus, ce qui est
+délibéré, mais que le step *tourne* dans ces conditions n'est pas établi.
+
+Aucun test hors ligne ne peut prendre le relais sur ces points : les suites lancent
+`rendre-compte.js` avec un environnement construit de zéro, elles ne voient jamais ce
+qu'un step de composite reçoit.
 
 ### `uses: ./<sous-répertoire>` et `GITHUB_ACTION_PATH`
 
