@@ -470,7 +470,12 @@ const ENV_ATTENDU = new Map([
       GH_TOKEN: '${{ inputs.github-token }}',
       NUMERO_ISSUE: '${{ steps.garde.outputs.issue }}',
       BRANCHE: '${{ steps.garde.outputs.branche }}',
-      STATUT_JOB: '${{ job.status }}',
+      // Pas de `STATUT_JOB` : retiré avec l'issue #3. `${{ job.status }}` vaut
+      // « success » dans un step qui suit un step de la même composite en échec
+      // (mesuré, run 32380365244), donc elle ne pouvait pas servir de critère de
+      // silence. Le contrat ne la liste plus ; ce test exigeant l'égalité EXACTE
+      // du bloc `env:`, la remettre dans `action.yml` sans l'ajouter ici fait
+      // rougir — et c'est voulu.
       SANS_PUBLICATION: '${{ inputs.no-publish }}',
     },
   ],

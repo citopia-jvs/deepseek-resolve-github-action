@@ -99,7 +99,6 @@ probable de tout le plan.
 | `GH_TOKEN` | input `github-token` |
 | `NUMERO_ISSUE` | sortie `issue` de la garde |
 | `BRANCHE` | sortie `branche` de la garde |
-| `STATUT_JOB` | `${{ job.status }}` |
 | `SANS_PUBLICATION` | input `no-publish` |
 | `GITHUB_RUN_ID`, `GITHUB_RUN_ATTEMPT` | runner — portée du marqueur, même règle que `resolve.js` |
 | `GH_CLI` | tests seulement — binaire `gh` injectable |
@@ -121,26 +120,53 @@ la garde.
 
 ### Ce que vaut `${{ job.status }}` dans une composite action
 
-Tranché au lot 5, **en lisant le runner**, parce que le lot 5 exigeait un smoke test
-qui fasse mourir `resolve.js` pour lever deux craintes qu'aucun test du dépôt ne
-pouvait mesurer. Les deux sont écartées à la source, dans `actions/runner` :
+**L'action ne consomme plus cette expression.** Ce qui suit reste écrit parce que la
+manière dont on s'est trompé compte davantage que la conclusion : sans ce
+procès-verbal, la même lecture d'`actions/runner` produira la même conclusion fausse
+au prochain lot.
 
-- **elle n'est jamais vide.** `StepsRunner.cs:53` pose
+Le lot 5 a tranché **en lisant le runner**, parce qu'il exigeait un smoke test faisant
+mourir `resolve.js` pour lever deux craintes qu'aucun test du dépôt ne pouvait mesurer.
+Deux affirmations en sont sorties. **Une tient, l'autre est fausse.**
+
+- **Elle n'est jamais vide — vrai.** `StepsRunner.cs:53` pose
   `jobContext.JobContext.Status = (jobContext.Result ?? TaskResult.Succeeded)` **avant**
   d'exécuter le premier step. La clé `status` existe donc dès le départ, et
-  `StepsRunner.cs:155`, `:196` et `:278` la remettent à jour après chaque step ;
-- **elle ne reste pas `success` dans une composite.** Un step embarqué reçoit ses
-  contextes par copie (`ExecutionContext.cs:136-138` recopie chaque paire de
-  `ExpressionValues` dans l'enfant), et `CompositeActionHandler.cs` ne remplace que
-  `inputs`, `steps`, `github` et `env` (`:144-158`, `:257-263`). La clé `job` n'est pas
-  remplacée : l'enfant partage **l'objet `JobContext` du job**, donc la même valeur de
-  `status` que les steps du workflow appelant.
+  `StepsRunner.cs:155`, `:196` et `:278` la remettent à jour après chaque step. Confirmé
+  à l'exécution : la valeur reçue était bien renseignée.
+- **« Elle ne reste pas `success` dans une composite » — FAUX. Mesuré.** Run
+  `32380365244` du dépôt d'essai, image `ubuntu-24.04`. Le step `resoudre` se termine en
+  `conclusion=failure` ; le step suivant de la **même** composite démarre aussitôt et
+  reçoit `STATUT_JOB: success`. `rendre-compte.js` en a conclu « le compte rendu a été
+  publié par la boucle. Rien à publier ici », et **n'a rien publié** — dans le seul
+  scénario pour lequel ce step existe.
 
-Ce que cela laisse non prouvé : que le runner exécute bien un step `if: always()` d'une
-composite dans un job déjà rouge. C'est un comportement du runner, pas de notre code ;
-le câblage de notre côté — `if: always() && …` et `STATUT_JOB: ${{ job.status }}` — est
-contrôlé statiquement par `test/action.test.js`, et le traitement des trois valeurs de
-`STATUT_JOB` par `test/compte-rendu.test.js`.
+  La lecture du code n'était pas absurde : un step embarqué reçoit ses contextes par
+  copie (`ExecutionContext.cs:136-138`), et `CompositeActionHandler.cs` ne remplace que
+  `inputs`, `steps`, `github` et `env` (`:144-158`, `:257-263`), donc l'enfant partage
+  bien l'objet `JobContext` du job. Ce qu'elle n'autorisait pas, c'est d'en **déduire**
+  que `status` refléterait l'échec d'un step déjà terminé du même job au moment où le
+  step suivant lit son `env:`. Elle ne le fait pas.
+
+**Leçon de méthode, et c'est le vrai contenu de cette section : une lecture du code du
+runner ne remplace pas une mesure sur le runner.** C'est ce raccourci qui a fait
+renoncer au smoke test que le lot 5 prévoyait (`plan/lot-5-ci.md:255-278`) — le seul
+dispositif qui aurait attrapé le défaut. Le dépôt est resté vert pendant que l'action
+ne démarrait pas.
+
+Conséquence : le critère de silence du step de secours n'est plus « le job a-t-il
+échoué ? » — un fait du runner qu'on ne sait pas lire — mais **« un compte rendu existe-
+t-il déjà pour ce run ? »**, un fait que l'action écrit et relit elle-même, via le
+marqueur (`porteeDuRun()`, `marqueurCompteRendu()`). Ce critère vit dans du code que
+`test/compte-rendu.test.js` exerce en sous-processus, et non dans une expression du
+YAML que `test/action.test.js` ne peut que comparer à une chaîne littérale.
+
+Reste non prouvé, et il faut le dire : que le runner exécute un step `if: always()`
+d'une composite **jusqu'au bout** dans un job déjà rouge. Le run ci-dessus rend le
+démarrage certain — le step a bien tourné — mais il s'est tu volontairement, donc la
+publication n'a jamais été observée. Aucun test hors ligne ne peut le mesurer : les
+suites lancent `rendre-compte.js` avec un environnement construit de zéro, elles ne
+voient jamais ce qu'un step de composite reçoit.
 
 ### `uses: ./<sous-répertoire>` et `GITHUB_ACTION_PATH`
 
@@ -228,9 +254,9 @@ exactement celui que le step `if: always()` existe pour couvrir.
 R9 prévoit qu'un même couple issue / branche serve à **plusieurs runs** : un second
 `@dseek` sur la même issue reprend `fix-issue-<n>` et la même PR. Le compte rendu du
 run précédent y est donc déjà, marqueur compris. Mesuré : avec un commentaire portant
-le marqueur nu sur la PR et `STATUT_JOB=failure`, `rendre-compte.js` répond
-« Un compte rendu est déjà présent sur la pull request #7 : rien à republier » et sort
-en 0. L'utilisateur du run 2 ne reçoit **rien**, alors que le job vient de mourir.
+le marqueur **nu** sur la PR, `rendre-compte.js` répond « Un compte rendu est déjà
+présent sur la pull request #7 : rien à republier » et sort en 0. L'utilisateur du
+run 2 ne reçoit **rien**, alors que le job vient de mourir. D'où la portée.
 
 `GITHUB_RUN_ID` et `GITHUB_RUN_ATTEMPT` sont fournies d'office par le runner à tous
 les steps : la portée ne coûte aucune ligne d'`env:` dans `action.yml`, donc aucune
@@ -261,11 +287,32 @@ compte rendu quand le job meurt avant `publierCompteRendu`, et ne doit rien repu
 sinon. Reconnaître un compte rendu à son emoji serait fragile ; ce marqueur est stable,
 invisible dans le rendu GitHub, et c'est **nous** qui l'écrivons, pas un tiers.
 
-Ce que `rendre-compte.js` en fait, tranché au lot 4 : il cherche le marqueur dans les
-commentaires de la **PR de `BRANCHE` si elle existe, et dans ceux de l'issue sinon** —
-`publierCompteRendu` publie sur l'un ou sur l'autre selon `bilan.numeroPr`, donc
-chercher d'un seul côté republierait sur le chemin R4, où le compte rendu part sur
-l'issue.
+Ce que `rendre-compte.js` en fait : il cherche le marqueur sur **la cible, puis — et
+seulement s'il ne l'y trouve pas — sur l'autre candidat**. Autrement dit : la PR de
+`BRANCHE` si elle existe, puis l'issue ; l'issue seule quand il n'y a pas de PR. La
+**cible de publication**, elle, ne change pas : c'est la PR si elle existe, l'issue
+sinon.
+
+Chercher d'un seul côté ne suffit pas, et le lot 4 l'avait déjà à moitié vu :
+`publierCompteRendu` publie sur la PR ou sur l'issue selon `bilan.numeroPr`
+(`scripts/resolve.js:2383-2388`), donc le chemin R4 — compte rendu sur l'issue — serait
+republié. Mais la formulation « PR **sinon** issue » laissait un trou plus étroit, resté
+masqué jusqu'ici par le court-circuit `STATUT_JOB=success` : `numeroPrDeLaBranche`
+résout la PR en `--state all`, donc une PR **fermée** d'un run antérieur compte comme
+existante. Chemin atteignable — la garde ne refuse que les PR **ouvertes**
+(`scripts/garde.js:451`) : PR d'un run précédent fermée sans suppression de branche,
+puis un run où `resolve.js` publie sur l'issue. Le filet lisait alors la PR fermée, n'y
+trouvait que le marqueur du run d'avant, et publiait un doublon affirmant « l'action
+s'est arrêtée sans publier » sur un run qui venait de publier. Retirer le court-circuit
+rendait ce doublon réel : d'où la recherche des deux côtés.
+
+**Dette assumée, et laissée hors de ce lot — issue #6** : la cible reste la PR de la
+branche **même fermée**, donc un compte rendu de secours peut atterrir sur une PR que
+personne ne relit. Noter que la recherche des deux côtés absorbe le motif d'origine du
+`--state all` (« une PR fermée entre-temps porte quand même le compte rendu de
+`resolve.js` ») : ce qu'il décide encore, c'est la cible, et là il choisit mal. Le
+corriger rouvrirait cette décision et le cas de `test/compte-rendu.test.js` qui
+l'épingle jeton par jeton — d'où une issue à part, plutôt qu'un passager clandestin.
 
 Le compte rendu de secours porte **lui aussi** le marqueur : deux exécutions du step
 `if: always()` — reprise de job, relance manuelle — ne doivent pas laisser deux

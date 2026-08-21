@@ -24,8 +24,9 @@
 //
 //   A. les refus d'entrée, fail-closed : `::error::` qui NOMME l'entrée fautive, et
 //      ZÉRO appel `gh` — on ne poste pas sur une cible qu'on n'a pas su valider ;
-//   B. les chemins qui ne publient pas (`no-publish`, statut « success », jeton
-//      absent) : zéro appel `gh`, et le corps quand même dans les logs ;
+//   B. les chemins qui ne publient pas (`no-publish`, jeton absent) : zéro appel
+//      `gh`, et le corps quand même dans les logs. Plus le garde-fou qui prouve que
+//      `STATUT_JOB` n'est plus lu — le statut du job n'est plus un chemin de silence ;
 //   C. l'idempotence et la PORTÉE du run — le cœur du lot. Chaque cas contrôle la
 //      DÉCISION et le NOMBRE d'appels de publication ;
 //   D. la cible : pull request si elle existe, issue sinon, et `--repo` sur CHAQUE
@@ -169,9 +170,6 @@ function lancer(cas, { env = {} } = {}) {
     GITHUB_REPOSITORY: DEPOT,
     NUMERO_ISSUE,
     BRANCHE,
-    // « failure » par défaut : c'est le seul statut où ce script a du travail, donc
-    // le seul défaut utile. « success » est un cas à part, exercé pour lui-même.
-    STATUT_JOB: 'failure',
     GH_TOKEN: 'jeton-de-test',
     // Trappe de test du contrat : sans elle, ce fichier n'existerait pas.
     GH_CLI: STUB_GH,
@@ -270,8 +268,14 @@ function verifierErreurNommant(execution, nomEntree) {
  *
  * @param {object} execution
  * @param {boolean} publieAttendu
+ * @param {{ lecturesAttendues?: number }} [options]
+ *   `lecturesAttendues` : nombre de lectures de commentaires attendues AVANT un
+ *   silence. Vaut 1 par défaut — le marqueur trouvé sur la cible tranche à lui seul,
+ *   et le script s'arrête là. Un silence obtenu après DEUX lectures est le cas où le
+ *   marqueur n'était pas sur la cible mais sur l'autre candidat : c'est un fait
+ *   différent, il se déclare.
  */
-function verifierDecision(execution, publieAttendu) {
+function verifierDecision(execution, publieAttendu, { lecturesAttendues = 1 } = {}) {
   const publications = appelsPublication(execution.appels);
   if (publieAttendu) {
     assert.equal(
@@ -303,7 +307,7 @@ function verifierDecision(execution, publieAttendu) {
     // journal ne les distinguerait pas.
     assert.equal(
       appelsLecture(execution.appels).length,
-      1,
+      lecturesAttendues,
       `la décision de ne rien republier doit suivre une lecture des commentaires` +
         `\n${execution.traces}`,
     );
@@ -459,7 +463,15 @@ test('GITHUB_REPOSITORY mal formé : refus nommé, zéro appel gh, code 0', () =
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// B. Les chemins qui ne publient pas
+// B. Les chemins qui ne publient pas — `no-publish` et jeton absent
+//
+// Le statut du job N'EN EST PLUS UN. Deux cas ont disparu d'ici : « la réserve
+// no-publish nomme le statut success » et « STATUT_JOB=success : le script se tait ».
+// Ils épinglaient un court-circuit mesuré faux — run 32380365244, un step de composite
+// qui suit un step échoué de la MÊME composite reçoit `success` — donc le seul
+// scénario que ce step existe pour couvrir était aussi le seul où il se taisait.
+// Le dernier cas de la famille prend leur place : il prouve que cette variable n'est
+// plus lue du tout, et c'est le garde-fou anti-régression de tout le lot.
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('SANS_PUBLICATION=true : le corps part dans le journal du job et nulle part ailleurs', () => {
@@ -483,53 +495,64 @@ test('SANS_PUBLICATION=true : le corps part dans le journal du job et nulle part
   );
 });
 
-test('SANS_PUBLICATION=true et statut « success » : la réserve précède le corps', () => {
-  // « statut inattendu (success) » suivi d'un démenti se lit à l'envers : le lecteur
-  // des logs croit le premier des deux messages. L'ordre est donc une exigence, pas
-  // une préférence de rédaction.
-  const execution = lancer('sans-publication-success', {
-    env: { SANS_PUBLICATION: 'true', STATUT_JOB: 'success' },
-  });
+test('`STATUT_JOB` n\'est plus lu : ni le corps ni la décision n\'en dépendent', () => {
+  // LE GARDE-FOU ANTI-RÉGRESSION DE CE LOT, et le seul cas de cette famille qui
+  // PUBLIE — il est ici parce qu'il remplace les deux cas qui faisaient de
+  // `STATUT_JOB=success` un chemin de silence.
+  //
+  // Mesuré sur le run 32380365244 : un step de composite qui suit un step de la même
+  // composite terminé en `conclusion=failure` reçoit `success`. Le court-circuit
+  // `STATUT_JOB === 'success'` faisait donc taire ce script dans le seul scénario pour
+  // lequel il existe. Le critère de silence est désormais le marqueur, et rien d'autre.
+  //
+  // Deux valeurs, dont la valeur EXACTE qui déclenchait le court-circuit. La seconde
+  // est hostile : si un futur remaniement remettait une valeur d'environnement dans le
+  // corps publié, ce cas rougirait sur la fuite avant même de rougir sur la décision.
+  const fauxJeton = `ghp_${'A'.repeat(36)}`;
+  const hostile = `\`<--> statut-etrange | ${fauxJeton} ${'ab '.repeat(200)}`;
 
-  verifierCodeZero(execution);
-  verifierAucunAppelGh(execution, 'no-publish interdit toute écriture');
+  for (const [nom, valeur] of [
+    ['success', 'success'],
+    ['hostile', hostile],
+  ]) {
+    const execution = lancer(`statut-ignore-${nom}`, {
+      env: envIdempotence({
+        STATUT_JOB: valeur,
+        GITHUB_RUN_ID: '222',
+        GITHUB_RUN_ATTEMPT: '1',
+      }),
+    });
 
-  // Ancré sur des entités, pas sur les phrases : le nom de l'input (`no-publish`), la
-  // valeur du statut (`success`) et le marqueur du contrat. La réserve est journalisée
-  // sur la MÊME ligne que l'annonce, le corps commence à la ligne suivante — donc
-  // l'ordre se lit sur la position, sans citer une seule formulation.
-  const lignes = execution.stdout.split('\n');
-  assert.ok(
-    lignes[0].includes('no-publish'),
-    `la première ligne doit annoncer la décision\n${execution.traces}`,
-  );
-  assert.ok(
-    lignes[0].includes('success'),
-    `la réserve doit nommer le statut du job sur la ligne d'annonce, AVANT le corps : ` +
-      `« statut inattendu (success) » suivi d'un démenti se lit à l'envers, et le ` +
-      `lecteur croit le premier des deux\n${execution.traces}`,
-  );
-  const positionMarqueur = execution.stdout.indexOf(MARQUEUR_NU);
-  assert.ok(
-    positionMarqueur > lignes[0].length,
-    `le corps, reconnu à son marqueur, doit venir après la ligne d'annonce` +
-      `\n${execution.traces}`,
-  );
-});
+    verifierCodeZero(execution);
+    // La décision est prise après une LECTURE, et elle publie : c'est exactement ce que
+    // le court-circuit supprimé empêchait.
+    verifierDecision(execution, true);
+    // DEUX lectures : le marqueur n'est nulle part, donc la cible (la pull request)
+    // puis l'autre candidat (l'issue) sont consultés tous les deux avant de publier.
+    assert.equal(
+      appelsLecture(execution.appels).length,
+      2,
+      `la décision doit reposer sur la lecture du marqueur, pas sur STATUT_JOB` +
+        `\n${execution.traces}`,
+    );
 
-test('STATUT_JOB=success : la décision de se taire est journalisée, zéro appel gh', () => {
-  const execution = lancer('statut-success', { env: { STATUT_JOB: 'success' } });
-
-  verifierCodeZero(execution);
-  verifierAucunAppelGh(
-    execution,
-    'la boucle a publié son propre compte rendu : rien à lire, rien à écrire',
-  );
-  assert.ok(
-    execution.stdout.includes('success'),
-    `sans cette ligne, un lecteur de logs ne comprend pas le silence de ce step` +
-      `\n${execution.traces}`,
-  );
+    // Et aucun fragment de la valeur reçue n'atteint le corps publié ni les logs : le
+    // corps est intégralement statique, `BRANCHE` exceptée.
+    const cibles = [
+      ['le corps publié', execution.corps[0]],
+      ['stdout', execution.stdout],
+      ['stderr', execution.stderr],
+    ];
+    for (const fragment of ['statut-etrange', 'ghp_', 'ab ab', valeur]) {
+      for (const [ou, texte] of cibles) {
+        assert.ok(
+          !texte.includes(fragment),
+          `le fragment « ${fragment.slice(0, 20)} » de STATUT_JOB ne doit apparaître ` +
+            `nulle part : cette variable n'est plus lue du tout — ${ou}\n${execution.traces}`,
+        );
+      }
+    }
+  }
 });
 
 test('GH_TOKEN vide : le corps est journalisé AVANT le ::error::, zéro appel gh, code 0', () => {
@@ -787,6 +810,11 @@ test('LIMITE ASSUMÉE : un commentaire tiers qui imite la portée courante fait 
 // `publierCompteRendu` poste sur l'une ou sur l'autre selon `bilan.numeroPr` :
 // chercher d'un seul côté republierait sur le chemin R4, où le compte rendu part
 // sur l'issue.
+//
+// D'où deux questions distinctes, et il faut les deux : OÙ le marqueur est cherché —
+// la cible, puis l'autre candidat si elle ne l'a pas —, et OÙ le compte rendu est
+// publié — la cible, et elle seule. Les confondre coûte soit le doublon de la PR
+// fermée (cas « doublon-pr-fermee »), soit une publication qui se déplace.
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('pull request trouvée : lecture ET publication partent sur la PR, avec --repo partout', () => {
@@ -812,11 +840,18 @@ test('pull request trouvée : lecture ET publication partent sur la PR, avec --r
     `--state all : une PR fermée porte quand même le compte rendu\n${execution.traces}`,
   );
 
+  // La cible d'abord, puis l'autre candidat — le marqueur n'est sur aucun des deux.
+  // L'ORDRE est le fait : la cible est consultée la première, et la seconde lecture
+  // n'a lieu que parce que la première n'a rien trouvé.
   assert.deepEqual(
     appelsLecture(execution.appels).map((a) => [a[0], a[1], a[2]]),
-    [['pr', 'view', NUMERO_PR]],
-    `la lecture doit viser la pull request\n${execution.traces}`,
+    [
+      ['pr', 'view', NUMERO_PR],
+      ['issue', 'view', NUMERO_ISSUE],
+    ],
+    `la lecture doit viser la pull request, puis l'issue\n${execution.traces}`,
   );
+  // La PUBLICATION, elle, ne vise qu'une cible : la pull request.
   assert.deepEqual(
     appelsPublication(execution.appels).map((a) => [a[0], a[1], a[2]]),
     [['pr', 'comment', NUMERO_PR]],
@@ -873,6 +908,103 @@ test("aucune pull request : un compte rendu déjà présent SUR L'ISSUE arrête 
   );
 });
 
+test("PR fermée d'un run antérieur, compte rendu de CE run sur l'issue : rien à republier", () => {
+  // LE DOUBLON MESURÉ, et le seul chemin où la cible n'est pas celle qu'a choisie
+  // `resolve.js`. `numeroPrDeLaBranche` résout la pull request en `--state all`, donc
+  // une PR FERMÉE d'un run antérieur compte comme existante — la garde ne refuse que
+  // les PR OUVERTES (`scripts/garde.js`), donc une PR fermée à la main sans supprimer
+  // la branche laisse ce chemin ouvert. `resolve.js` publie alors son compte rendu sur
+  // l'ISSUE (chemin R4, ou mort avant le push), et le filet qui ne lisait que la cible
+  // n'y trouvait que le marqueur du run d'AVANT : il publiait un doublon affirmant
+  // « l'action s'est arrêtée sans publier de compte rendu pour ce run » sur un run qui
+  // venait justement d'en publier un.
+  //
+  // Le corps côté issue est construit ICI, depuis le littéral du contrat : le
+  // reprendre de `rendre-compte.js` propagerait une mutation de la forme du marqueur à
+  // l'attendu, et le cas resterait vert.
+  const execution = lancer('doublon-pr-fermee', {
+    env: envIdempotence({
+      GITHUB_RUN_ID: '222',
+      GITHUB_RUN_ATTEMPT: '1',
+      // Côté pull request : le compte rendu du run 111-1, celui d'avant.
+      GH_STUB_COMMENTAIRES: 'marqueur-portee',
+      GH_STUB_PORTEE_MARQUEUR: '111-1',
+      // Côté issue : le compte rendu de CE run, publié par `resolve.js`.
+      GH_STUB_COMMENTAIRES_ISSUE: 'libre',
+      GH_STUB_CORPS_COMMENTAIRE:
+        `❌ Échec après 2 itération(s).\n\n${marqueurPorte('222-1')}`,
+    }),
+  });
+
+  verifierCodeZero(execution);
+  // Les DEUX faits, parce que le silence seul ne prouverait rien : un script mort avant
+  // de lire se tait aussi. D'où le nombre de lectures ici, et la liste exacte plus bas.
+  verifierDecision(execution, false, { lecturesAttendues: 2 });
+  verifierRepoPartout(execution);
+  assert.deepEqual(
+    appelsLecture(execution.appels).map((a) => [a[0], a[1], a[2]]),
+    [
+      ['pr', 'view', NUMERO_PR],
+      ['issue', 'view', NUMERO_ISSUE],
+    ],
+    `la lecture de l'ISSUE doit avoir eu lieu : c'est elle qui porte le compte rendu de ` +
+      `ce run, et sans elle le silence serait un accident\n${execution.traces}`,
+  );
+});
+
+test("marqueur nulle part, ni sur la PR ni sur l'issue : publie, une seule fois", () => {
+  // La contrepartie du cas ci-dessus, et elle compte autant : chercher des deux côtés
+  // ne doit pas devenir un chemin de silence. Remplacer la recherche par un « true »
+  // constant, ou consulter l'autre candidat et en tirer un « déjà publié », rendrait le
+  // cas du doublon vert et celui-ci rouge.
+  //
+  // Un commentaire humain de chaque côté, pas zéro : « aucun marqueur » n'est pas
+  // « aucun commentaire », et un script qui conclurait sur la longueur de la liste
+  // plutôt que sur le marqueur passerait le second sans passer le premier.
+  const execution = lancer('marqueur-nulle-part', {
+    env: envIdempotence({
+      GITHUB_RUN_ID: '222',
+      GITHUB_RUN_ATTEMPT: '1',
+      GH_STUB_COMMENTAIRES: 'tiers',
+      GH_STUB_COMMENTAIRES_ISSUE: 'tiers,tiers',
+    }),
+  });
+
+  verifierCodeZero(execution);
+  verifierDecision(execution, true);
+  verifierRepoPartout(execution);
+
+  assert.deepEqual(
+    appelsLecture(execution.appels).map((a) => [a[0], a[1], a[2]]),
+    [
+      ['pr', 'view', NUMERO_PR],
+      ['issue', 'view', NUMERO_ISSUE],
+    ],
+    `les deux candidats doivent avoir été consultés avant de publier` +
+      `\n${execution.traces}`,
+  );
+  // UNE seule publication, et sur la cible : consulter deux candidats ne fait pas
+  // publier deux fois, et ne déplace pas la cible sur l'issue.
+  assert.deepEqual(
+    appelsPublication(execution.appels).map((a) => [a[0], a[1], a[2]]),
+    [['pr', 'comment', NUMERO_PR]],
+    `la publication reste unique, et sur la pull request\n${execution.traces}`,
+  );
+  // Deux lectures réussies n'ont rien à signaler : la seconde lecture est le chemin
+  // NOMINAL, pas une dégradation.
+  assert.deepEqual(
+    annotations(execution.stdout, 'warning'),
+    [],
+    `lire les deux candidats est le chemin nominal : aucun avertissement attendu` +
+      `\n${execution.traces}`,
+  );
+  assert.ok(
+    !execution.corps[0].includes('doublon'),
+    `les deux lectures ont abouti : le corps publié n'a aucune réserve à émettre` +
+      `\n${execution.traces}`,
+  );
+});
+
 test('plusieurs pull requests pour la branche : la plus récente, donc le plus grand numéro', () => {
   // Le stub sert 4, 12 puis 7. `Math.max` était tenu par rien : avec une seule PR
   // servie, le remplacer par `Math.min` laissait toute la suite verte. L'ordre des trois
@@ -897,8 +1029,12 @@ test('plusieurs pull requests pour la branche : la plus récente, donc le plus g
 
   assert.deepEqual(
     appelsLecture(execution.appels).map((a) => [a[0], a[1], a[2]]),
-    [['pr', 'view', '12']],
-    `la lecture doit viser la pull request de plus grand numéro\n${execution.traces}`,
+    [
+      ['pr', 'view', '12'],
+      ['issue', 'view', NUMERO_ISSUE],
+    ],
+    `la lecture doit viser la pull request de plus grand numéro, puis l'issue` +
+      `\n${execution.traces}`,
   );
   assert.deepEqual(
     appelsPublication(execution.appels).map((a) => [a[0], a[1], a[2]]),
@@ -1073,6 +1209,62 @@ test("lecture qui répond un objet sans champ « comments » : ::warning:: puis 
   );
 });
 
+test('CAS MIXTE : marqueur absent de la cible, lecture impossible sur l\'autre candidat', () => {
+  // L'arbitrage tranché dans `compteRenduDejaPublie` : la vérification a été PARTIELLE,
+  // donc « lecture impossible » l'emporte sur « marqueur absent ». Les deux valeurs
+  // publient — l'arbitrage général « plutôt un doublon qu'un silence » ne les sépare
+  // pas ; ce qui les sépare est le CORPS publié, où seule « lecture impossible » ajoute
+  // la réserve. Affirmer « l'action s'est arrêtée sans publier de compte rendu pour ce
+  // run » sans avoir su relire l'un des deux candidats serait une affirmation que
+  // personne n'a contrôlée.
+  //
+  // `json-invalide` côté issue seulement : la cible répond normalement, donc la
+  // dégradation porte bien sur le SECOND candidat et pas sur la première lecture — le
+  // scénario `echec-view` fait tomber les deux et n'exercerait pas ce cas.
+  const execution = lancer('degrade-mixte', {
+    env: envIdempotence({
+      GITHUB_RUN_ID: '222',
+      GITHUB_RUN_ATTEMPT: '1',
+      GH_STUB_COMMENTAIRES: 'tiers',
+      GH_STUB_COMMENTAIRES_ISSUE: 'json-invalide',
+    }),
+  });
+
+  verifierCodeZero(execution);
+  verifierDecision(execution, true);
+  assert.deepEqual(
+    appelsLecture(execution.appels).map((a) => [a[0], a[1], a[2]]),
+    [
+      ['pr', 'view', NUMERO_PR],
+      ['issue', 'view', NUMERO_ISSUE],
+    ],
+    `la première lecture aboutit, la seconde échoue : les deux doivent avoir été tentées` +
+      `\n${execution.traces}`,
+  );
+
+  // Le corps porte la réserve : c'est le fait qui distingue cet arbitrage de l'autre.
+  assert.ok(
+    execution.corps[0].includes('doublon'),
+    `une vérification partielle doit publier la réserve : le lecteur du commentaire ` +
+      `n'ouvre pas les logs du job\n${execution.traces}`,
+  );
+
+  // Et le diagnostic nomme les deux entités : le candidat qu'on n'a pas su relire, et
+  // la cible où le commentaire est parti. Nommer la cible seule renverrait chercher la
+  // panne du mauvais côté.
+  const avertissements = annotations(execution.stdout, 'warning');
+  assert.ok(
+    avertissements.some((ligne) => ligne.includes(`#${NUMERO_ISSUE}`)),
+    `un ::warning:: doit nommer le candidat dont les commentaires n'ont pas pu être ` +
+      `relus\n${execution.traces}`,
+  );
+  assert.ok(
+    avertissements.some((ligne) => ligne.includes(`#${NUMERO_PR}`)),
+    `un ::warning:: doit nommer la cible sur laquelle le compte rendu part quand même` +
+      `\n${execution.traces}`,
+  );
+});
+
 test('publication impossible : ::error::, corps présent dans les logs, code 0', () => {
   const execution = lancer('degrade-publication', {
     env: envIdempotence({
@@ -1188,6 +1380,15 @@ test("« pr list » en échec : un ::warning:: nommant la branche et l'issue, pu
 
 // ═════════════════════════════════════════════════════════════════════════════
 // F. Le texte publié, et l'accord de forme entre les deux fichiers
+//
+// PERTE ASSUMÉE, et il faut l'écrire : trois cas ont disparu d'ici — « STATUT_JOB
+// hostile », « STATUT_JOB court » et « STATUT_JOB réduit à un faux jeton ». Ils
+// exerçaient `citerValeur`, supprimée avec le statut du job. Le corps publié ne porte
+// plus AUCUNE valeur externe hors `BRANCHE`, validée par `/^fix-issue-\d+$/` : il n'y
+// a donc plus rien à masquer, à borner ni à nettoyer dedans, et un test qui
+// prétendrait le vérifier n'exercerait plus de code. `masquerSecrets` reste appliqué
+// en filet dans `avecFichierCorps` et dans `journaliser`, et `test/texte.test.js`
+// couvre la primitive elle-même.
 // ═════════════════════════════════════════════════════════════════════════════
 
 test("le corps se termine par le marqueur, et n'en contient qu'un", () => {
@@ -1214,285 +1415,90 @@ test("le corps se termine par le marqueur, et n'en contient qu'un", () => {
   assert.equal(compter(corps, '-->'), 1, execution.traces);
 });
 
-test('STATUT_JOB hostile : mono-ligne, masqué, borné, et le span de code reste fermé', () => {
-  // 36 caractères après le préfixe : c'est la longueur que reconnaît le motif de
-  // `masquerSecrets`. Un faux jeton, jamais un vrai — ce fichier est versionné.
-  const fauxJeton = `ghp_${'A'.repeat(36)}`;
-  // Les caractères dangereux sont placés au TOUT DÉBUT et à la TOUTE FIN de la valeur,
-  // pas au milieu. `tronquer` ne garde qu'une tête et une queue de quelques caractères
-  // chacune : une première version de ce test les mettait au milieu, ils tombaient dans
-  // la partie retirée, et le test restait vert alors que `citerValeur` ne nettoyait
-  // plus rien. Mesuré — retirer `.replace(/[`|<>]/g, ' ')` du script ne faisait rougir
-  // aucun test.
-  const statut = [
-    '`<--> premiere ligne',
-    `milieu | ${fauxJeton}`,
-    // Espaces à dessein : sans eux, le motif base64 de `masquerSecrets` avalerait
-    // toute la queue et la BORNE ne serait plus exercée.
-    `queue ${'ab '.repeat(200)}|<-->\``,
-  ].join('\n');
-
-  const execution = lancer('texte-statut-hostile', {
+test('deux régimes du corps : marqueur absent, ou vérification impossible', () => {
+  // Remplace « les trois régimes de STATUT_JOB rendent trois phrases distinctes » :
+  // `phraseDuStatut` n'existe plus, le corps ne dépend plus du statut du job, et sa
+  // première ligne est donc la même partout. La distinction qui reste — et la seule
+  // que ce script sache faire — est celle de sa PROPRE fiabilité : a-t-il pu relire
+  // les commentaires avant de publier, ou publie-t-il à l'aveugle ?
+  //
+  // Même forme de test que celui qu'il remplace, et il faut les DEUX faits :
+  //
+  //   1. les deux corps sont distincts. Attrape l'effondrement des deux régimes en un
+  //      seul — un drapeau `verificationImpossible` ignoré resterait vert sans lui ;
+  //   2. le régime dégradé le DIT dans le corps publié, en nommant le risque
+  //      (« doublon »). Le fait 1 seul ne suffirait pas : deux corps distincts par
+  //      n'importe quel détail passeraient, alors que le lecteur du commentaire, qui
+  //      n'ouvre pas les logs du job, doit y lire la réserve.
+  const nominal = lancer('regime-nominal', {
+    env: envIdempotence({ GITHUB_RUN_ID: '222', GITHUB_RUN_ATTEMPT: '1' }),
+  });
+  // `echec-view` est un échec PARTIEL : seule la lecture des commentaires tombe, `pr
+  // list` répond normalement. Sans cela la cible changerait, et les deux corps
+  // différeraient par la branche — pas par le régime.
+  const degrade = lancer('regime-verification-impossible', {
     env: envIdempotence({
-      STATUT_JOB: statut,
+      GH_STUB_SCENARIO: 'echec-view',
       GITHUB_RUN_ID: '222',
       GITHUB_RUN_ATTEMPT: '1',
     }),
   });
 
-  verifierCodeZero(execution);
-  assert.equal(execution.corps.length, 1, execution.traces);
-
-  const corps = execution.corps[0];
-  const premiereLigne = corps.split('\n')[0];
-
-  // Mono-ligne, prouvé par un FAIT et non par la fin de phrase attendue : un statut de
-  // trois lignes ne doit pas ajouter une seule ligne au corps. Le témoin est un run
-  // identique avec un statut anodin qui prend la même branche de `phraseDuStatut`.
-  const temoin = lancer('texte-statut-temoin', {
-    env: envIdempotence({
-      STATUT_JOB: 'inattendu',
-      GITHUB_RUN_ID: '222',
-      GITHUB_RUN_ATTEMPT: '1',
-    }),
-  });
-  verifierCodeZero(temoin);
-  assert.equal(
-    corps.split('\n').length,
-    temoin.corps[0].split('\n').length,
-    `un statut multi-ligne ne doit pas ajouter de ligne au corps : la suite serait ` +
-      `rendue en markdown, hors du span de code\n${execution.traces}`,
-  );
-
-  // Et aucun fragment du statut injecté ne se retrouve après la première ligne, où le
-  // span de code le contient.
-  for (const fragment of ['premiere', 'milieu', 'queue', 'ab ab']) {
-    const fuites = corps
-      .split('\n')
-      .slice(1)
-      .filter((ligne) => ligne.includes(fragment));
-    assert.deepEqual(
-      fuites,
-      [],
-      `le fragment « ${fragment} » du statut ne doit pas sortir de la première ligne` +
-        `\n${execution.traces}`,
-    );
-  }
-
-  // Le span de code reste fermé : exactement deux backticks sur la ligne.
-  assert.equal(
-    compter(premiereLigne, '`'),
-    2,
-    `les backticks du statut doivent être retirés, sinon le span où il est inséré se ` +
-      `referme en avance\n${execution.traces}`,
-  );
-
-  // Bornée : la valeur citée ne dépasse pas la borne du script.
-  const cite = premiereLigne.match(/\(`([^`]*)`\)/);
-  assert.ok(cite, `la valeur doit être citée dans un span de code\n${execution.traces}`);
-  assert.ok(
-    cite[1].length <= 40,
-    `la valeur citée doit être bornée ; obtenu ${cite[1].length} caractères` +
-      `\n${execution.traces}`,
-  );
-
-  // Masquée : aucune trace du faux jeton, ni dans le corps publié, ni dans les logs
-  // du job — un commentaire de dépôt public est lu par tout le monde (R7).
-  for (const [ou, texte] of [
-    ['le corps publié', corps],
-    ['stdout', execution.stdout],
-    ['stderr', execution.stderr],
-  ]) {
-    assert.ok(
-      !texte.includes(fauxJeton) && !texte.includes('ghp_'),
-      `le faux jeton ne doit pas apparaître dans ${ou}\n${execution.traces}`,
-    );
-  }
-
-  // Le commentaire HTML du marqueur reste le seul, et il n'est pas refermé en avance
-  // par le « --> » du statut.
-  assert.equal(compter(corps, '-->'), 1, execution.traces);
-  assert.ok(
-    corps.endsWith(marqueurPorte('222-1')),
-    `le marqueur doit rester en fin de corps\n${execution.traces}`,
-  );
-  assert.ok(
-    !premiereLigne.includes('-->'),
-    `« --> » doit être neutralisé dans la valeur citée\n${execution.traces}`,
-  );
-});
-
-test('STATUT_JOB court : rien n\'est tronqué, donc le nettoyage est le seul à agir', () => {
-  // Contre-épreuve du cas précédent. Sous la borne, `tronquer` rend la chaîne telle
-  // quelle : tout ce qui reste dans la valeur citée y est parce que `citerValeur` l'a
-  // laissé passer, et rien n'est masqué par un effet de bord de la troncature. C'est
-  // le seul cas où l'on peut conclure quelque chose de l'ABSENCE d'un caractère.
-  const statut = '`x` --> |y| <z>';
-
-  const execution = lancer('texte-statut-court', {
-    env: envIdempotence({
-      STATUT_JOB: statut,
-      GITHUB_RUN_ID: '222',
-      GITHUB_RUN_ATTEMPT: '1',
-    }),
-  });
-
-  verifierCodeZero(execution);
-  const corps = execution.corps[0];
-  const premiereLigne = corps.split('\n')[0];
-  const cite = premiereLigne.match(/\(`([^`]*)`\)/);
-  assert.ok(cite, `la valeur doit être citée dans un span de code\n${execution.traces}`);
-
-  // Le span de code reste fermé : les deux seuls backticks de la ligne sont les siens.
-  assert.equal(
-    compter(premiereLigne, '`'),
-    2,
-    `un backtick venu du statut refermerait le span en avance, et la suite de la ` +
-      `phrase serait rendue en markdown\n${execution.traces}`,
-  );
-  // `<` et `>` : un « --> » rouvrirait ou refermerait un commentaire HTML, et un
-  // « <z> » serait pris pour une balise par le rendu GitHub.
-  for (const caractere of ['<', '>', '|']) {
-    assert.ok(
-      !cite[1].includes(caractere),
-      `« ${caractere} » doit être retiré de la valeur citée ; obtenu ` +
-        `${JSON.stringify(cite[1])}\n${execution.traces}`,
-    );
-  }
-  assert.equal(
-    compter(corps, '-->'),
-    1,
-    `le seul « --> » du corps est celui qui ferme le marqueur\n${execution.traces}`,
-  );
-  // Les lettres, elles, sont conservées : un nettoyage qui viderait la valeur passerait
-  // toutes les assertions ci-dessus sans rien dire au lecteur du compte rendu.
-  for (const lettre of ['x', 'y', 'z']) {
-    assert.ok(
-      cite[1].includes(lettre),
-      `le contenu lisible du statut doit être conservé\n${execution.traces}`,
-    );
-  }
-});
-
-test('STATUT_JOB réduit à un faux jeton : masqué, et sous la borne donc non tronqué', () => {
-  // 40 caractères pile : `tronquer` rend une chaîne de 40 caractères telle quelle, donc
-  // la troncature ne peut PAS être ce qui fait disparaître le jeton. C'est ce qui rend
-  // l'absence de « ghp_ » concluante ici, alors qu'elle ne l'est pas dans le cas long,
-  // où le milieu de la valeur est retiré de toute façon.
-  //
-  // La propriété contrôlée est de bout en bout — « aucun jeton dans le commentaire ni
-  // dans les logs » — et non un appel précis. Mesuré : le masquage est posé sur TROIS
-  // couches (`citerValeur`, `journaliser`, `avecFichierCorps`) et retirer l'une des
-  // trois ne fait rien fuir ; ce test rougit quand les trois sautent. C'est la bonne
-  // granularité : R7 est une propriété du texte publié, pas d'une ligne de code.
-  const fauxJeton = `ghp_${'A'.repeat(36)}`;
-  assert.equal(fauxJeton.length, 40, 'le faux jeton doit tenir pile dans la borne');
-
-  const execution = lancer('texte-statut-jeton', {
-    env: envIdempotence({
-      STATUT_JOB: fauxJeton,
-      GITHUB_RUN_ID: '222',
-      GITHUB_RUN_ATTEMPT: '1',
-    }),
-  });
-
-  verifierCodeZero(execution);
-  for (const [ou, texte] of [
-    ['le corps publié', execution.corps[0]],
-    ['stdout', execution.stdout],
-    ['stderr', execution.stderr],
-  ]) {
-    assert.ok(
-      !texte.includes('ghp_'),
-      `un jeton du job ne doit atteindre ni le commentaire ni les logs (R7) : ` +
-        `${ou}\n${execution.traces}`,
-    );
-  }
-  // Et la valeur citée n'est pas vide : elle porte la trace du masquage, sinon le
-  // lecteur du compte rendu ne sait pas qu'il y avait quelque chose.
-  const cite = execution.corps[0].split('\n')[0].match(/\(`([^`]*)`\)/);
-  assert.ok(cite, `la valeur doit rester citée\n${execution.traces}`);
-  assert.notEqual(cite[1], '(vide)', execution.traces);
-});
-
-test('les trois régimes de STATUT_JOB rendent trois phrases distinctes deux à deux', () => {
-  // `phraseDuStatut` a trois branches, et le lot 4 demande au corps de porter la
-  // distinction : un job ANNULÉ — ou dont le `timeout-minutes` du consommateur est
-  // tombé — rapporté « le job a échoué » envoie l'utilisateur chercher une panne là où
-  // il n'y a qu'un délai dépassé.
-  //
-  // Deux faits sont contrôlés, et il faut les DEUX :
-  //
-  //   1. les trois premières lignes sont distinctes deux à deux. Attrape
-  //      l'effondrement des trois branches en une seule ;
-  //   2. un statut RECONNU n'est jamais recité au lecteur : sa phrase ne porte aucun
-  //      span de code et n'écho pas la valeur reçue. Seul le régime « inattendu » cite
-  //      ce qu'il a reçu, parce que c'est la seule chose qu'il sache en dire.
-  //
-  // Le fait 1 seul ne suffit PAS, et c'est mesuré : en neutralisant le test de
-  // « cancelled », ce statut tombe dans la branche « inattendu » et rend « … statut
-  // inattendu (`cancelled`) … » — une phrase encore distincte des deux autres, puisque
-  // la valeur citée diffère. C'est le fait 2 qui rougit alors.
-  const statutInattendu = 'etrange-42';
-  const reconnus = ['cancelled', 'failure'];
-  const executions = new Map();
-
-  for (const statut of [...reconnus, statutInattendu]) {
-    const execution = lancer(`regime-${encodeURIComponent(statut)}`, {
-      env: envIdempotence({
-        STATUT_JOB: statut,
-        GITHUB_RUN_ID: '222',
-        GITHUB_RUN_ATTEMPT: '1',
-      }),
-    });
+  for (const execution of [nominal, degrade]) {
     verifierCodeZero(execution);
     verifierDecision(execution, true);
-    executions.set(statut, execution);
   }
 
-  const premiereLigne = (statut) => executions.get(statut).corps[0].split('\n')[0];
+  const corpsNominal = nominal.corps[0];
+  const corpsDegrade = degrade.corps[0];
 
-  // Fait 1 : distinctes deux à deux.
-  const statuts = [...executions.keys()];
-  for (let i = 0; i < statuts.length; i += 1) {
-    for (let j = i + 1; j < statuts.length; j += 1) {
-      assert.notEqual(
-        premiereLigne(statuts[i]),
-        premiereLigne(statuts[j]),
-        `STATUT_JOB=${JSON.stringify(statuts[i])} et ${JSON.stringify(statuts[j])} doivent ` +
-          `donner deux phrases différentes : « annulé » et « échoué » ne sont pas la même ` +
-          `nouvelle pour l'utilisateur\n${executions.get(statuts[i]).traces}`,
-      );
-    }
-  }
-
-  // Fait 2 : un statut reconnu n'est pas recité.
-  for (const statut of reconnus) {
-    const ligne = premiereLigne(statut);
-    assert.equal(
-      compter(ligne, '`'),
-      0,
-      `STATUT_JOB=${JSON.stringify(statut)} est un statut RECONNU : sa phrase le nomme en ` +
-        `clair et n'a rien à citer. Un span de code ici veut dire que la valeur est ` +
-        `retombée dans la branche « statut inattendu »\n${executions.get(statut).traces}`,
-    );
-    assert.ok(
-      !ligne.includes(statut),
-      `STATUT_JOB=${JSON.stringify(statut)} ne doit pas être renvoyé tel quel à ` +
-        `l'utilisateur : la phrase doit dire ce que ce statut SIGNIFIE` +
-        `\n${executions.get(statut).traces}`,
-    );
-  }
-
-  // Et le régime inattendu, lui, cite ce qu'il a reçu — c'est tout ce qu'il sait.
-  const ligneInattendue = premiereLigne(statutInattendu);
-  const cite = ligneInattendue.match(/\(`([^`]*)`\)/);
-  assert.ok(
-    cite,
-    `un statut inconnu doit être cité : sans lui, le lecteur des logs ne peut pas ` +
-      `savoir ce que le runner a envoyé\n${executions.get(statutInattendu).traces}`,
+  // Fait 1 : distincts.
+  assert.notEqual(
+    corpsDegrade,
+    corpsNominal,
+    `un compte rendu publié SANS avoir pu vérifier l'absence de doublon ne peut pas ` +
+      `affirmer la même chose qu'un compte rendu publié après une lecture réussie` +
+      `\n${degrade.traces}`,
   );
-  assert.equal(cite[1], statutInattendu, executions.get(statutInattendu).traces);
+
+  // Le régime dégradé AJOUTE, il ne réécrit pas : tout ce que dit le corps nominal
+  // reste dit. Contrôlé ligne par ligne, donc sans citer une seule formulation.
+  for (const ligne of corpsNominal.split('\n').filter((l) => l !== '')) {
+    assert.ok(
+      corpsDegrade.includes(ligne),
+      `le régime dégradé doit ajouter une réserve, pas remplacer le corps : la ligne ` +
+        `${JSON.stringify(ligne.slice(0, 40))} a disparu\n${degrade.traces}`,
+    );
+  }
+  assert.ok(
+    corpsDegrade.split('\n').length > corpsNominal.split('\n').length,
+    `la réserve doit être une phrase de PLUS, sur sa propre ligne\n${degrade.traces}`,
+  );
+
+  // Fait 2 : la réserve nomme le risque. Le mot est l'entité contrôlée — un corps
+  // dégradé qui ne dit pas « doublon » ne prévient pas le lecteur du commentaire.
+  assert.ok(
+    corpsDegrade.includes('doublon'),
+    `le corps publié à l'aveugle doit nommer le risque de doublon : un ::warning:: dans ` +
+      `les logs du job ne suffit pas, le lecteur du commentaire ne les ouvre pas` +
+      `\n${degrade.traces}`,
+  );
+  assert.ok(
+    !corpsNominal.includes('doublon'),
+    `le régime nominal a bien relu les commentaires : il n'a aucune réserve à émettre, ` +
+      `et l'émettre quand même rendrait la réserve du régime dégradé sans valeur` +
+      `\n${nominal.traces}`,
+  );
+
+  // Et le marqueur reste unique et final dans les deux régimes : la réserve est
+  // insérée dans le corps, pas après lui.
+  for (const [nom, corps] of [['nominal', corpsNominal], ['dégradé', corpsDegrade]]) {
+    assert.ok(
+      corps.endsWith(marqueurPorte('222-1')),
+      `le marqueur doit terminer le corps du régime ${nom}\n${degrade.traces}`,
+    );
+    assert.equal(compter(corps, 'deepseek-resolve:compte-rendu'), 1, degrade.traces);
+  }
 });
 
 // ─── Accord de forme entre `rendre-compte.js` et `resolve.js` ────────────────

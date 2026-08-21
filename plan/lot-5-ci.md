@@ -285,6 +285,19 @@ de faire remonter le verdict d'un job **volontairement rouge** vers un second jo
 `needs`, `continue-on-error` et des sorties de job. Beaucoup de machinerie fragile pour
 une variable que le runner documente dans son code.
 
+**Constaté depuis, et c'est la seconde des deux réfutations ci-dessus qui est fausse.**
+« Jamais vide » tient. « Jamais bloquée sur `success` dans une composite » ne tient pas :
+mesuré sur le run `32380365244`, `job.status` valait `success` dans le step suivant
+immédiatement un step de la **même** composite terminé en `conclusion=failure`. C'est
+donc exactement le premier des deux modes de panne annoncés plus haut qui s'est produit
+— `rendre-compte.js` sortait en tête, R12 était vide, aucun test ne rougissait.
+
+Le renoncement à ce job de smoke en a été la cause immédiate : rien dans le dépôt ne
+pouvait l'attraper avant un run réel, et c'est bien ce qui est arrivé. Mesure et
+procès-verbal complets dans `plan/contrat.md`, section « Ce que vaut `${{ job.status }}`
+dans une composite action ». Leçon, écrite là-bas et dans `CLAUDE.md` : une lecture du
+code du runner ne remplace pas une mesure sur le runner.
+
 ## Job 4 — La boucle, hors ligne
 
 **Nouveau.** C'est ce que le stub `AIDER_CLI` du lot 1 débloque.

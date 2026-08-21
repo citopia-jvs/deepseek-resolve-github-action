@@ -165,6 +165,16 @@ référence encore ailleurs échouera pour cette raison.
 6. **Compte rendu final**, sur la PR (ou sur l'issue si aucune PR n'a été
    ouverte) : succès ou échec, nombre d'itérations, cause.
 
+Un dernier step tourne systématiquement, même si tout le reste a échoué en cours de
+route : c'est le filet de sécurité. Il ne reprend **pas** le compte rendu de l'étape 6,
+qu'il ne connaît pas — il publie un message court signalant que l'action s'est arrêtée
+sans conclure, et rappelant où regarder : les logs du job, et la branche si du travail
+y a déjà été poussé. Il ne connaît pas la cause et ne prétend pas la deviner.
+
+Son critère est simple : il publie seulement si aucun compte rendu ne porte déjà la
+marque du run en cours (voir plus bas). S'il en trouve un — c'est le cas de tous les
+runs qui vont au bout, réussite comme échec — il se tait.
+
 Deux points structurants :
 
 - aider tourne avec `--no-auto-commits` et `--yes-always` : c'est **l'action**
@@ -319,7 +329,8 @@ d'exécution isolé.
   connaît pas nativement.
 
 - **Le compte rendu de secours porte un marqueur invisible**, lié au run en
-  cours (identifiant et numéro de tentative). Un commentaire tiers qui
+  cours (identifiant et numéro de tentative), et c'est désormais le **seul**
+  critère qui décide s'il publie ou se tait. Un commentaire tiers qui
   imiterait ce marqueur pour la portée du run courant ferait taire le filet
   de sécurité qui publie un compte rendu quand le job meurt sans conclure
   normalement. Le coût, dans ce cas, est un commentaire de courtoisie perdu

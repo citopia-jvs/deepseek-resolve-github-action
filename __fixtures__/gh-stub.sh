@@ -164,6 +164,18 @@
 #                               « aucun commentaire », ce qui rendrait le test vert
 #                               pour la mauvaise raison.
 #
+#   GH_STUB_COMMENTAIRES_ISSUE  Même format que GH_STUB_COMMENTAIRES, mais pour
+#                               `issue view <n> --json comments` SEULEMENT. Absente
+#                               (défaut), la réponse de l'issue reste celle de
+#                               GH_STUB_COMMENTAIRES : aucun appel existant ne change
+#                               de comportement.
+#                               Sans ce bouton, les commentaires de la pull request et
+#                               ceux de l'issue sont les MÊMES, et le doublon que
+#                               `rendre-compte.js` doit éviter n'est pas exprimable :
+#                               une PR fermée d'un run antérieur portant le marqueur
+#                               d'une autre portée, et le compte rendu de CE run sur
+#                               l'issue.
+#
 #   GH_STUB_PORTEE_MARQUEUR     Portée écrite dans le jeton « marqueur-portee ».
 #                               Défaut : « 111-1 », donc un AUTRE run que celui du
 #                               test, par défaut.
@@ -259,8 +271,20 @@ corps_compte_rendu() {
     'Echec apres 2 iteration(s). Cause : la validation ne passe pas.' "$1"
 }
 
+# $1 = l'entité consultée, « pr » ou « issue ». Elle est passée en argument parce que
+# les deux côtés doivent pouvoir répondre DIFFÉREMMENT : `rendre-compte.js` cherche le
+# marqueur sur la pull request puis sur l'issue, et le doublon qu'il doit éviter n'est
+# exprimable qu'avec deux réponses distinctes.
 emettre_commentaires() {
+  entite="${1:-}"
   liste="${GH_STUB_COMMENTAIRES:-aucun}"
+
+  # GH_STUB_COMMENTAIRES_ISSUE ne vaut que pour l'issue, et seulement si elle est
+  # renseignée : absente, la réponse de l'issue reste celle de GH_STUB_COMMENTAIRES,
+  # donc aucun appel existant ne change de comportement.
+  if [ "$entite" = "issue" ] && [ -n "${GH_STUB_COMMENTAIRES_ISSUE:-}" ]; then
+    liste="$GH_STUB_COMMENTAIRES_ISSUE"
+  fi
 
   case "$liste" in
     json-invalide)
@@ -430,7 +454,7 @@ case "${1:-} ${2:-}" in
         printf 'gh-stub: lecture des commentaires en échec simulé (« echec-view »)\n' >&2
         exit "${GH_STUB_CODE_SORTIE:-1}"
       fi
-      emettre_commentaires
+      emettre_commentaires "${1:-}"
     elif [ "${2:-}" = "view" ] && [ "${1:-}" = "pr" ]; then
       # Comportement d'avant : `gh` écrit l'URL de l'objet consulté.
       printf 'https://github.com/%s/pull/%s\n' "$depot" "$numero_pr"
