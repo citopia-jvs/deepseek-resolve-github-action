@@ -162,19 +162,51 @@ peut fermer une mutation qui change la **sémantique** du shell sans changer son
 
 ### Ce que vaut `${{ job.status }}` dans une composite
 
-Elle n'est jamais vide, et elle **n'est pas remise à `success`** dans les steps d'une
-composite : l'enfant partage l'objet `JobContext` du job appelant
-(`ExecutionContext.cs:136-138`, `CompositeActionHandler.cs:144-158`). Et elle n'est
-jamais vide parce que `StepsRunner.cs:53` la pose **avant** le premier step. C'est ce qui
-permet à `rendre-compte.js`, dans son step `if: always() && …poursuivre == 'true'`, de lire un `STATUT_JOB`
-qui reflète l'état réel du job même si `resolve.js` est mort avant d'écrire quoi que
-ce soit. `rendre-compte.js` reconnaît un compte rendu déjà publié par un marqueur
-`<!-- deepseek-resolve:compte-rendu run=<id>-<tentative> -->`, portant l'identifiant et
-la tentative du run — et par un marqueur **nu**, sans suffixe, quand la portée est
-inconnue (exécution locale, harnais de test), la reconnaissance acceptant les deux
-formes (`porteeDuRun()`, `marqueurCompteRendu()` dans
-`scripts/resolve.js` et `scripts/rendre-compte.js`) — sans quoi une relance de job
-republierait le compte rendu du run précédent, ou l'inverse : le tairait à tort.
+Elle n'est jamais vide : `StepsRunner.cs:53` la pose **avant** le premier step. Cette
+moitié tient, confirmée à l'exécution.
+
+L'autre moitié — « elle n'est pas remise à `success` dans les steps d'une composite » —
+était **fausse**, et ça s'est vu en run réel. Mesuré sur le run `32380365244`
+(image `ubuntu-24.04`) : le step `resoudre` se termine en `conclusion=failure`, et le
+step suivant de la **même** composite démarre en recevant `success`. Le compte rendu
+de secours en a conclu — à tort — qu'un compte rendu avait déjà été publié par la
+boucle, et il n'a rien publié, dans le seul scénario où ce step existe. C'est l'issue
+#3 : job rouge, aucun compte rendu.
+
+La lecture d'`ExecutionContext.cs:136-138` et de `CompositeActionHandler.cs:144-158`
+qui a produit l'affirmation fausse n'était pas absurde en soi : un step embarqué reçoit
+bien l'objet `JobContext` du job appelant, ces deux fichiers ne remplaçant que
+`inputs`, `steps`, `github` et `env`. Mais partager l'objet n'autorisait pas à en
+**déduire** que sa clé `status` refléterait l'échec d'un step déjà terminé du même job,
+au moment où le step suivant lit son `env:`. Elle ne le fait pas.
+
+**Conséquence : l'action ne consomme plus cette expression.** Le critère de silence du
+step de secours n'est plus « le job a-t-il échoué ? » mais « un compte rendu existe-t-il
+déjà pour ce run ? ». `rendre-compte.js` répond à cette question en cherchant un
+marqueur : `<!-- deepseek-resolve:compte-rendu run=<id>-<tentative> -->`, qui porte
+l'identifiant et la tentative du run, ou un marqueur **nu**, sans suffixe, quand la
+portée est inconnue (exécution locale, harnais de test). La reconnaissance accepte les
+deux formes (`porteeDuRun()`, `marqueurCompteRendu()` dans `scripts/resolve.js` et
+`scripts/rendre-compte.js`) — sans quoi une relance de job republierait le compte rendu
+du run précédent, ou l'inverse : le tairait à tort.
+
+Le filet a été mesuré de bout en bout, faute d'un test qui puisse le faire : run
+`32462323017`, `resolve.js` tué avant toute pull request par un `base-branch`
+inexistant. Job rouge, **un** commentaire de secours publié sur l'issue, et zéro
+occurrence de `STATUT_JOB` dans le log. Ce run établit aussi qu'un step `if: always()`
+d'une composite s'exécute **jusqu'au bout** dans un job déjà rouge, ce qui n'était que
+supposé. Le silence, lui, est mesuré par le run `32462525547`. Ce que les suites ne
+pourront jamais couvrir : elles lancent `rendre-compte.js` avec un environnement
+construit de zéro, donc ne voient jamais ce qu'un step de composite reçoit.
+
+Leçon de méthode, pour tout agent qui serait tenté de trancher un point du runner en
+lisant `actions/runner` plutôt qu'en le mesurant : **une lecture du code du runner ne
+remplace pas une mesure sur le runner.** C'est ce raccourci qui a fait renoncer, au
+lot 5, au smoke test qui aurait fait mourir `resolve.js` en CI — le seul dispositif du
+dépôt qui aurait attrapé ce défaut avant un run réel. Le dépôt est resté vert pendant
+que l'action ne publiait rien. Détail de la mesure et du raisonnement :
+`plan/contrat.md`, section « Ce que vaut `${{ job.status }}` dans une composite
+action ».
 
 ## Pièges vérifiés
 

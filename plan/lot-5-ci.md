@@ -274,8 +274,10 @@ mesurer une variable :
   **le `JobContext` du job**.
 
 Le détail est dans « Ce que vaut `${{ job.status }}` dans une composite action » du
-contrat, avec ce qui reste non prouvé : que le runner exécute bien un step `if: always()`
-d'une composite dans un job déjà rouge. C'est un comportement du runner, pas notre code.
+contrat. Ce paragraphe y laissait un point non prouvé — que le runner exécute bien un
+step `if: always()` d'une composite dans un job déjà rouge. **Il l'est depuis : run
+32462323017, le step tourne et publie.** Mesuré à la main sur un dépôt d'essai, faute
+du job de CI auquel cette section a renoncé.
 
 Ce que ce job aurait coûté, pour mémoire : faire passer la garde en CI demande de
 surcharger `GITHUB_EVENT_NAME` et `GITHUB_EVENT_PATH` par l'`env:` du job — faisable,
@@ -284,6 +286,19 @@ embarqué — puis de laisser la composite installer Python et les 107 paquets d
 de faire remonter le verdict d'un job **volontairement rouge** vers un second job par
 `needs`, `continue-on-error` et des sorties de job. Beaucoup de machinerie fragile pour
 une variable que le runner documente dans son code.
+
+**Constaté depuis, et c'est la seconde des deux réfutations ci-dessus qui est fausse.**
+« Jamais vide » tient. « Jamais bloquée sur `success` dans une composite » ne tient pas :
+mesuré sur le run `32380365244`, `job.status` valait `success` dans le step suivant
+immédiatement un step de la **même** composite terminé en `conclusion=failure`. C'est
+donc exactement le premier des deux modes de panne annoncés plus haut qui s'est produit
+— `rendre-compte.js` sortait en tête, R12 était vide, aucun test ne rougissait.
+
+Le renoncement à ce job de smoke en a été la cause immédiate : rien dans le dépôt ne
+pouvait l'attraper avant un run réel, et c'est bien ce qui est arrivé. Mesure et
+procès-verbal complets dans `plan/contrat.md`, section « Ce que vaut `${{ job.status }}`
+dans une composite action ». Leçon, écrite là-bas et dans `CLAUDE.md` : une lecture du
+code du runner ne remplace pas une mesure sur le runner.
 
 ## Job 4 — La boucle, hors ligne
 

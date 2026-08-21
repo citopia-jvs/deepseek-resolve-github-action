@@ -10,11 +10,24 @@
 // scénario « il attend et ne comprend pas ». Ce script publie alors le compte rendu
 // manquant.
 //
-// Il est IDEMPOTENT : il ne republie rien si `resolve.js` a déjà publié le sien,
-// reconnu à son marqueur — figé dans `plan/contrat.md`, invisible dans le rendu
-// GitHub, et écrit par nous, pas par un tiers. Son propre compte rendu porte le même
-// marqueur : deux exécutions du step (reprise de job, relance manuelle) ne doivent
-// pas laisser deux commentaires.
+// LE CRITÈRE DE SILENCE EST LE MARQUEUR, ET RIEN D'AUTRE : ce script publie sauf s'il
+// trouve un compte rendu portant le marqueur de CE run — figé dans `plan/contrat.md`,
+// invisible dans le rendu GitHub, et écrit par nous, pas par un tiers. Il le cherche
+// des DEUX côtés, la cible puis l'autre candidat, parce que la cible n'est pas toujours
+// celle qu'a choisie `resolve.js` : voir `compteRenduDejaPublie`. Son propre compte
+// rendu porte le même marqueur : deux exécutions du step (reprise de job, relance
+// manuelle) ne doivent pas laisser deux commentaires.
+//
+// `${{ job.status }}` n'est PLUS consommée : mesuré sur le run 32380365244, un step de
+// composite qui suit un step de la même composite terminé en `conclusion=failure`
+// reçoit `success` — le court-circuit qu'on en tirait faisait taire ce script dans le
+// seul scénario pour lequel il existe. Le fait qu'on lit désormais est un fait que
+// l'action écrit elle-même. Procès-verbal complet dans `plan/contrat.md`, section
+// « Ce que vaut `${{ job.status }}` dans une composite action ».
+//
+// Conséquence R7, favorable : la seule valeur d'environnement qui atteigne encore le
+// corps publié est `config.branche`, validée par `/^fix-issue-\d+$/`. Le corps est
+// donc intégralement statique — plus rien à citer, à masquer ni à borner dedans.
 //
 // Code de sortie : 0 sur TOUS les chemins, échec de publication compris. Ce script
 // est le dernier step du job, sous `if: always()` : rougir ici ferait passer au rouge
@@ -31,7 +44,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { gh } = require('./lib/gh.js');
-const { masquerSecrets, tronquer } = require('./lib/texte.js');
+const { masquerSecrets } = require('./lib/texte.js');
 
 // ---------------------------------------------------------------------------
 // Journal du job
@@ -128,10 +141,6 @@ function lireConfiguration() {
     numeroIssue,
     branche,
     jetonGh: lireEnv('GH_TOKEN'),
-    // `${{ job.status }}` : « success », « failure » ou « cancelled ». Laissé en
-    // chaîne brute — c'est la valeur du runner, et toute autre valeur est traitée
-    // comme un statut inattendu plutôt que devinée.
-    statutJob: lireEnv('STATUT_JOB'),
     // Tous les inputs d'action sont des chaînes : on ne compare qu'à `'true'`,
     // jamais à `'false'`.
     sansPublication: lireEnv('SANS_PUBLICATION') === 'true',
@@ -221,70 +230,49 @@ function motifMarqueur() {
   );
 }
 
-const LONGUEUR_MAX_STATUT_CITE = 40;
-
-/**
- * Rend une valeur d'environnement citable dans un commentaire public.
- *
- * `STATUT_JOB` vient du runner, mais rien ne garantit sa forme : elle est masquée
- * (les logs et les commentaires d'un dépôt public sont lus par tout le monde),
- * ramenée sur une ligne, débarrassée des caractères qui refermeraient le span de
- * code où elle est insérée, puis bornée.
- */
-function citerValeur(valeur) {
-  const propre = masquerSecrets(String(valeur))
-    .replace(/\s+/g, ' ')
-    .replace(/[`|<>]/g, ' ')
-    .trim();
-  if (propre === '') return '(vide)';
-  // Le marqueur de `tronquer` porte des retours à la ligne : mesuré, un statut trop
-  // long faisait sortir la phrase du span de code où elle est insérée, et la suite
-  // était rendue en markdown. On remet sur une ligne APRÈS la troncature.
-  return tronquer(propre, LONGUEUR_MAX_STATUT_CITE).replace(/\s+/g, ' ');
-}
-
-/**
- * Une phrase, factuelle, adaptée au statut du job.
- *
- * Le script ne sait rien de plus que ce statut : il n'a ni les itérations, ni la
- * sortie d'aider, ni les logs de validation — `resolve.js` est mort avant de les
- * lui transmettre. Promettre davantage ferait chercher au mauvais endroit.
- */
-function phraseDuStatut(statutJob) {
-  if (statutJob === 'cancelled') {
-    return (
-      '⚠️ Le job a été annulé, ou son délai d\'exécution a été dépassé, avant que ' +
-      "l'action ait pu publier son compte rendu."
-    );
-  }
-  if (statutJob === 'failure') {
-    return "❌ Le job a échoué avant que l'action ait pu publier son compte rendu.";
-  }
-  return (
-    `⚠️ Le job s'est terminé sur un statut inattendu (\`${citerValeur(statutJob)}\`) avant ` +
-    "que l'action ait pu publier son compte rendu."
-  );
-}
-
 /**
  * Construit le corps du compte rendu de secours.
  *
  * Aucun texte tiers n'y entre : ni titre, ni corps d'issue, ni sortie de
- * sous-processus. La seule valeur venue de l'extérieur est `STATUT_JOB`, qui passe
- * par `citerValeur`.
+ * sous-processus. Et plus aucune valeur d'environnement non plus, hormis
+ * `config.branche`, validée par `/^fix-issue-\d+$/` : le corps est statique.
+ *
+ * `⚠️` et non `❌` : `❌` est le vocabulaire de la boucle, qui rend un verdict
+ * (« ❌ Échec après … », `scripts/resolve.js`). Ce script-ci n'en rend aucun — il ne
+ * connaît pas la cause de l'arrêt, il sait seulement qu'aucun compte rendu n'existe
+ * pour ce run. D'où l'ÉNUMÉRATION des causes possibles au paragraphe suivant, et
+ * aucune affirmation : rapporter « le job a échoué » à qui vient de voir son job
+ * annulé, ou son délai dépassé, l'envoie chercher une panne là où il n'y en a pas.
  *
  * @param {Readonly<object>} config
+ * @param {{ verificationImpossible?: boolean }} [options]
+ *   `verificationImpossible` : `compteRenduDejaPublie` a rendu `null`, donc la
+ *   présence d'un compte rendu n'a pas pu être contrôlée. L'arbitrage « plutôt un
+ *   doublon qu'un silence » publie quand même — le corps doit alors le DIRE, sinon il
+ *   affirme au lecteur qu'aucun compte rendu n'existe alors que personne n'a pu le
+ *   vérifier.
  * @returns {string} corps markdown, terminé par le marqueur
  */
-function construireCorpsSecours(config) {
-  const lignes = [phraseDuStatut(config.statutJob)];
+function construireCorpsSecours(config, { verificationImpossible = false } = {}) {
+  const lignes = ["⚠️ L'action s'est arrêtée sans publier de compte rendu pour ce run."];
 
   lignes.push('');
   lignes.push(
     "Ce message est publié par le filet de sécurité de l'action, pas par sa boucle de " +
       "résolution : celle-ci ne s'est pas rendue jusqu'à son propre compte rendu, et " +
-      "l'état exact du travail n'est donc pas connu ici.",
+      "l'état exact du travail n'est donc pas connu ici. Les causes possibles sont un " +
+      "arrêt brutal de l'action, une annulation du job, un délai d'exécution dépassé du " +
+      'workflow appelant, ou une publication refusée — ce message ne permet pas de ' +
+      'trancher entre elles.',
   );
+
+  if (verificationImpossible) {
+    lignes.push('');
+    lignes.push(
+      "L'action n'a pas pu relire les commentaires existants : si un compte rendu a déjà " +
+        'été publié pour ce run, ce message en est un doublon.',
+    );
+  }
 
   lignes.push('');
   // Les logs du job sont la seule chose qu'on ait réellement à offrir : la sortie
@@ -349,9 +337,15 @@ function contientMarqueur(texte, portee = '') {
  * n'a pas pu le savoir.
  *
  * `--state all` et non `--state open` : une PR fermée entre-temps porte quand même
- * le compte rendu de `resolve.js`, et le chercher côté issue le republierait. Sur
- * plusieurs PR pour la même branche, la plus récente est celle du run courant, donc
- * le plus grand numéro.
+ * le compte rendu de `resolve.js`. Sur plusieurs PR pour la même branche, la plus
+ * récente est celle du run courant, donc le plus grand numéro.
+ *
+ * Ce que `--state all` décide ici, c'est la CIBLE, et rien d'autre : la recherche du
+ * marqueur, elle, interroge les deux candidats (`compteRenduDejaPublie`), donc une PR
+ * fermée qui porte le compte rendu ne peut plus faire republier côté issue. Que la
+ * cible reste une PR fermée — donc un compte rendu de secours sur une PR que personne
+ * ne relit — est une dette assumée, consignée dans `plan/contrat.md` et suivie par
+ * l'issue #6 : la corriger rouvre le choix de la cible, pas cette fonction.
  *
  * Une lecture impossible est traitée comme « pas de PR » : le compte rendu part
  * alors sur l'issue, qui existe toujours. Le pire cas est un doublon de
@@ -424,10 +418,12 @@ function numeroPrDeLaBranche(config) {
 }
 
 /**
- * Cible de lecture et de publication : la pull request si elle existe, l'issue
- * sinon. C'est exactement le choix de `publierCompteRendu`, qui poste sur l'une ou
- * sur l'autre selon `bilan.numeroPr` — chercher d'un seul côté republierait sur le
- * chemin R4, où le compte rendu part sur l'issue.
+ * Cible de PUBLICATION : la pull request si elle existe, l'issue sinon. C'est le choix
+ * de `publierCompteRendu`, qui poste sur l'une ou sur l'autre selon `bilan.numeroPr`.
+ *
+ * Sert aussi à désigner le second candidat de `compteRenduDejaPublie` : appelée avec
+ * `null`, elle rend l'issue. La RECHERCHE du marqueur, elle, ne se contente pas de la
+ * cible — voir `compteRenduDejaPublie`.
  *
  * @param {Readonly<object>} config
  * @param {number|null} numeroPr
@@ -476,22 +472,75 @@ function lireCommentaires(config, cible) {
 }
 
 /**
- * Un compte rendu est-il déjà publié sur la cible ?
+ * Un compte rendu de CE run est-il déjà publié — sur la cible, ou sur l'autre
+ * candidat ?
  *
  * Trois valeurs, parce qu'il y a trois situations et que les confondre coûte soit un
- * doublon, soit un silence : marqueur trouvé, marqueur absent, et lecture impossible —
- * ce dernier cas n'est PAS « absent », sinon une panne de lecture vaudrait « rien n'a
- * été publié ».
+ * doublon, soit un silence : marqueur trouvé, marqueur absent des DEUX côtés, et
+ * lecture impossible — ce dernier cas n'est PAS « absent », sinon une panne de lecture
+ * vaudrait « rien n'a été publié ».
+ *
+ * DEUX CANDIDATS, PAS UN. `publierCompteRendu` poste sur la PR ou sur l'issue selon
+ * `bilan.numeroPr` (`scripts/resolve.js`), et la cible calculée ici n'est pas toujours
+ * celle qu'il a choisie : `numeroPrDeLaBranche` résout la PR en `--state all`, donc une
+ * PR FERMÉE d'un run antérieur compte comme existante. Chemin atteignable — la garde ne
+ * refuse que les PR ouvertes (`scripts/garde.js`) : PR d'un run précédent fermée sans
+ * suppression de branche, puis un run où `resolve.js` publie sur l'issue (chemin R4, ou
+ * mort avant le push). En ne lisant que la cible, ce script ne trouvait sur la PR fermée
+ * que le marqueur du run d'AVANT, et publiait un doublon affirmant « l'action s'est
+ * arrêtée sans publier » sur un run qui venait de publier. D'où l'issue en second
+ * candidat quand la cible est la PR ; quand la cible est déjà l'issue, il n'y a pas
+ * d'autre candidat à consulter, la PR n'étant pas connue.
+ *
+ * LA SECONDE LECTURE N'A LIEU QUE SI LA PREMIÈRE N'A PAS TROUVÉ LE MARQUEUR. C'est une
+ * contrainte de conception, pas une optimisation : le marqueur trouvé sur la cible
+ * tranche à lui seul, et lire les deux côtés systématiquement ferait tomber les cas
+ * silencieux de `test/compte-rendu.test.js`, qui exigent UNE lecture avant un silence —
+ * ce qui distingue « il a lu, puis décidé » de « il est mort avant de lire ». Ne pas
+ * « simplifier » en lisant les deux côtés d'office.
+ *
+ * CAS MIXTE — marqueur absent d'un côté, lecture impossible de l'autre — tranché en
+ * `null`, donc en « lecture impossible ». Les deux valeurs publient : l'arbitrage
+ * général du script (« plutôt un doublon qu'un silence ») ne les sépare pas. Ce qui les
+ * sépare est le CORPS publié, où `null` ajoute la phrase de réserve. Or la vérification
+ * a réellement été partielle : affirmer « l'action s'est arrêtée sans publier de compte
+ * rendu pour ce run » sans avoir su relire l'un des deux candidats serait une
+ * affirmation que personne n'a contrôlée. La réserve est donc due.
+ *
+ * Une lecture impossible SUR LA CIBLE, elle, rend `null` tout de suite, sans consulter
+ * le second candidat : la décision est déjà arrêtée — publier avec réserve — et rien de
+ * ce qu'on lirait ensuite ne la changerait, `true` mis à part, que l'arbitrage
+ * ci-dessus refuse justement de trancher à l'aveugle.
  *
  * @param {Readonly<object>} config
- * @param {Readonly<object>} cible
- * @returns {boolean|null} `true` marqueur trouvé, `false` absent, `null` lecture
- *   impossible — l'appelant publie alors quand même, en le signalant.
+ * @param {Readonly<object>} cible rendue par `choisirCible`
+ * @returns {boolean|null} `true` marqueur trouvé, `false` absent des deux côtés, `null`
+ *   lecture impossible — l'appelant publie alors quand même, en le signalant.
  */
 function compteRenduDejaPublie(config, cible) {
-  const commentaires = lireCommentaires(config, cible);
-  if (commentaires === null) return null;
-  return commentaires.some((corps) => contientMarqueur(corps, config.porteeRun));
+  const surLaCible = lireCommentaires(config, cible);
+  if (surLaCible === null) return null;
+  if (surLaCible.some((corps) => contientMarqueur(corps, config.porteeRun))) return true;
+
+  // Pas de second candidat quand la cible est déjà l'issue : le numéro de la pull
+  // request n'est pas connu — soit elle n'existe pas, soit `gh pr list` n'a pas
+  // répondu, et le repli l'a déjà signalé.
+  if (cible.type !== 'pr') return false;
+
+  const autreCandidat = choisirCible(config, null);
+  const surAutreCandidat = lireCommentaires(config, autreCandidat);
+  if (surAutreCandidat === null) {
+    // Le `::warning::` de `principal()` dit où le compte rendu part malgré tout ; il ne
+    // dit pas QUELLE lecture a échoué, et il ne peut pas le dire — les deux candidats
+    // peuvent tomber. C'est cette ligne-ci qui nomme le candidat non relu, sans quoi le
+    // lecteur des logs chercherait la panne du côté de la cible, qui a répondu.
+    avertir(
+      `Les commentaires de ${autreCandidat.libelle} n'ont pas pu être relus : impossible ` +
+        `de savoir si le compte rendu de ce run y est déjà.`,
+    );
+    return null;
+  }
+  return surAutreCandidat.some((corps) => contientMarqueur(corps, config.porteeRun));
 }
 
 // ---------------------------------------------------------------------------
@@ -581,31 +630,16 @@ function principal() {
     return 0;
   }
 
+  // Construit SANS le drapeau de dégradation : à ce stade, aucune lecture n'a eu lieu,
+  // donc rien ne permet de dire qu'elle a échoué. Les deux chemins qui journalisent le
+  // corps sans jamais lire — `no-publish` et jeton absent — se servent de celui-ci ;
+  // le corps réellement publié est reconstruit plus bas, une fois la lecture faite.
   const corps = construireCorpsSecours(config);
 
   // Même règle que `publierCompteRendu` : sous `no-publish`, le compte rendu va dans
   // le journal du job et nulle part ailleurs.
   if (config.sansPublication) {
-    // La réserve est écrite AVANT le corps, pas après : « statut inattendu (success) »
-    // suivi d'un démenti se lit à l'envers, et le lecteur des logs croit le premier
-    // des deux.
-    const reserve =
-      config.statutJob === 'success'
-        ? ' Le statut du job est « success » : rien n\'aurait été publié de toute façon.'
-        : '';
-    journaliser(`no-publish : compte rendu de secours non publié.${reserve}\n${corps}`);
-    return 0;
-  }
-
-  // `resolve.js` sort en 0 y compris quand `max-iterations` est atteint sans que la
-  // validation passe : dans ce cas il a publié son compte rendu lui-même, avec le
-  // compte de tours et la cause que ce script n'a pas. La décision est journalisée,
-  // sinon un lecteur de logs ne comprend pas le silence de ce step.
-  if (config.statutJob === 'success') {
-    journaliser(
-      'Statut du job « success » : le compte rendu a été publié par la boucle. Rien à ' +
-        'publier ici.',
-    );
+    journaliser(`no-publish : compte rendu de secours non publié.\n${corps}`);
     return 0;
   }
 
@@ -624,21 +658,36 @@ function principal() {
   const cible = choisirCible(config, numeroPrDeLaBranche(config));
   const deja = compteRenduDejaPublie(config, cible);
 
+  // Le SEUL critère de silence : un compte rendu de ce run est déjà là. `resolve.js`
+  // sort en 0 y compris quand `max-iterations` est atteint sans que la validation
+  // passe — mais dans ce cas il a publié son compte rendu lui-même, avec le compte de
+  // tours et la cause que ce script n'a pas, et c'est son marqueur qu'on trouve ici.
   if (deja === true) {
-    journaliser(
-      `Un compte rendu est déjà présent sur ${cible.libelle} : rien à republier.`,
-    );
+    // Sans nommer de cible : le compte rendu trouvé peut être sur la pull request comme
+    // sur l'issue (`compteRenduDejaPublie` consulte les deux), et affirmer la mauvaise
+    // des deux enverrait le lecteur des logs chercher un commentaire là où il n'est pas.
+    // Les deux lectures figurent de toute façon dans le journal du job, avec leur argv.
+    journaliser('Un compte rendu de ce run est déjà publié : rien à republier.');
     return 0;
   }
   if (deja === null) {
+    // Nomme la cible de PUBLICATION, pas la lecture qui a échoué : celle qui a échoué
+    // peut être l'autre candidat, et c'est `compteRenduDejaPublie` qui le dit alors,
+    // juste avant. Ce message-ci répond à « pourquoi ce commentaire porte une réserve ».
     avertir(
-      `Les commentaires de ${cible.libelle} n'ont pas pu être relus : le compte rendu de ` +
-        'secours est publié sans avoir pu vérifier l\'absence de doublon.',
+      `Le compte rendu de secours part sur ${cible.libelle} sans avoir pu vérifier ` +
+        "l'absence de doublon : une lecture des commentaires n'a pas abouti.",
     );
   }
 
-  journaliser(corps);
-  publierSecours(config, cible, corps);
+  // Reconstruit avec le drapeau : le corps publié doit dire s'il a été publié à
+  // l'aveugle. Un `::warning::` dans les logs du job ne suffit pas — le lecteur du
+  // commentaire, lui, ne les ouvre pas forcément.
+  const corpsAPublier =
+    deja === null ? construireCorpsSecours(config, { verificationImpossible: true }) : corps;
+
+  journaliser(corpsAPublier);
+  publierSecours(config, cible, corpsAPublier);
   return 0;
 }
 
@@ -669,8 +718,6 @@ module.exports = {
   marqueurCompteRendu,
   lireConfiguration,
   construireCorpsSecours,
-  phraseDuStatut,
-  citerValeur,
   contientMarqueur,
   numeroPrDeLaBranche,
   choisirCible,

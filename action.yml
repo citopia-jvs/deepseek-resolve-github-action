@@ -154,13 +154,21 @@ runs:
     # `{using, steps}`. Sans ce step en `always()`, un `resolve.js` qui plante, un
     # `timeout-minutes` du consommateur ou un job annulé ne laisseraient que la
     # réaction sur l'issue, sans aucun message expliquant l'arrêt (R12).
+    #
+    # Pas de `STATUT_JOB: ${{ job.status }}` ici, et surtout ne pas le remettre :
+    # mesuré sur le run 32380365244, cette expression vaut « success » dans un step
+    # qui suit un step de la MÊME composite terminé en `conclusion=failure`. Le
+    # script s'en servait comme critère de silence et se taisait donc dans le seul
+    # scénario où il sert (issue #3). Son critère est maintenant le marqueur de
+    # compte rendu, qu'il écrit et relit lui-même. Procès-verbal de la mesure dans
+    # `plan/contrat.md`, section « Ce que vaut `${{ job.status }}` dans une
+    # composite action ».
     - if: always() && steps.garde.outputs.poursuivre == 'true'
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         NUMERO_ISSUE: ${{ steps.garde.outputs.issue }}
         BRANCHE: ${{ steps.garde.outputs.branche }}
-        STATUT_JOB: ${{ job.status }}
         SANS_PUBLICATION: ${{ inputs.no-publish }}
       run: node "$GITHUB_ACTION_PATH/scripts/rendre-compte.js"
 
