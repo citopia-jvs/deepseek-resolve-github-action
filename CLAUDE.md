@@ -50,8 +50,10 @@ utilise cette même forme, et `test/ci.test.js` l'y épingle jeton par jeton —
 Les suites sont **sept** : `chemins`, `texte`, `garde`, `boucle`, `action`,
 `compte-rendu`, `ci`. Les lancer par le glob `test/*.test.js`, jamais par une liste de
 noms écrite à la main — une suite ajoutée doit être exercée sans que personne y pense,
-et une liste recopiée ici serait périmée au lot suivant. Ne pas maintenir de compte de
-cas dans ce fichier, pour la même raison de péremption.
+et une liste recopiée ici serait périmée au lot suivant. Ne pas maintenir de compte
+— de cas de test, de steps, d'inputs, d'outputs ou de jobs — nulle part dans ce
+fichier : ce sont des détails qui changent à chaque lot, et un chiffre figé ici finit
+par mentir sans que rien ne le signale.
 
 `validation-command` (défaut `npm test`) s'applique au dépôt **consommateur** de
 l'action, jamais à celui-ci : il n'y a pas de `npm test` ici, et ce n'est pas un oubli.
@@ -66,7 +68,7 @@ Les tests le font déjà ; regarder l'en-tête de `__fixtures__/gh-stub.sh` et d
 ## Architecture
 
 ```
-action.yml                # using: composite, 5 steps, 13 inputs, 5 outputs
+action.yml                # using: composite — steps, inputs, outputs (voir action.yml)
 aider.conf.yml            # config d'aider, maîtrisée par l'action, hors d'atteinte du modèle
 aider-models.json         # métadonnées des modèles DeepSeek, absents de litellm
 scripts/garde.js          # événement, autorisation, anti-rejeu — tourne avant l'install d'aider
@@ -74,8 +76,8 @@ scripts/resolve.js        # préparation de la branche, primitives, orchestratio
 scripts/rendre-compte.js  # step if: always() — compte rendu, y compris quand resolve.js est mort
 scripts/lib/              # gh.js, git.js, chemins.js, texte.js — stdlib seule
 __fixtures__/             # payloads d'événements + stubs gh et aider
-test/                     # sept suites, lancées par le glob test/*.test.js
-.github/workflows/test.yml # la CI du dépôt : quatre jobs, hors ligne
+test/                     # les suites, lancées par le glob test/*.test.js
+.github/workflows/test.yml # la CI du dépôt : plusieurs jobs, hors ligne
 plan/                     # le plan de refonte, dont contrat.md — source des noms
 ```
 
@@ -224,11 +226,17 @@ Heures de débogage économisées ; aucun ne se devine à la lecture du code seu
 - **aider ne commite pas par `git commit -a`.** Les deux appelants de `repo.commit`
   passent une liste de fichiers explicite — `aider/coders/base_coder.py:2383` et
   `:2419` — et la branche `cmd += ["-a"]` de `aider/repo.py:289` est morte dans ce
-  flux. Le risque réel, plus étroit, est `--dirty-commits` (défaut `True`) sur un
-  fichier que la validation vient de modifier et qu'aider édite ensuite — sans effet
-  ici puisque l'action passe `--no-auto-commits` **et** `--no-dirty-commits`, et pose
-  `dirty-commits: false` dans `aider.conf.yml` : les trois, pas seulement le premier —
-  écrit autrement, `--no-dirty-commits` passe pour redondant et se fait retirer.
+  flux. Ce point est établi par lecture de source, pas par une mesure en run réel —
+  à traiter avec la même prudence que la leçon de méthode plus bas sur `job.status` :
+  une lecture peut se tromper sur ce qu'un comportement fait réellement à l'exécution.
+  Le risque plus étroit qui reste, lui, est déduit et non mesuré : `--dirty-commits`
+  (défaut `True`) commiterait un fichier que la commande de validation du consommateur
+  vient de modifier, si aider l'éditait ensuite dans le même tour — par exemple un
+  fichier de lock ou de snapshot régénéré par la validation puis retouché par aider.
+  Sans effet ici puisque l'action passe `--no-auto-commits` **et**
+  `--no-dirty-commits`, et pose `dirty-commits: false` dans `aider.conf.yml` : les
+  trois, pas seulement le premier — écrit autrement, `--no-dirty-commits` passe pour
+  redondant et se fait retirer.
 - **`--config`, `--env-file` et `--model-metadata-file` sont cherchés dans le git
   root** — c'est-à-dire le checkout du consommateur, là où le modèle écrit. Un
   `.aider.conf.yml` créé à l'itération 1 est donc lu à l'itération 2 et peut y fixer
