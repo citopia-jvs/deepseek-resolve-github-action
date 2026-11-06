@@ -216,6 +216,7 @@ runs:
         PASSAGES: ${{ steps.claude2.outcome != 'skipped' && '2' || '1' }}
         ISSUE_CLAUDE: ${{ steps.claude2.outcome != 'skipped' && steps.claude2.outcome || steps.claude1.outcome }}
         EXTRAIT: ${{ steps.claude2.outcome != 'skipped' && steps.verifier2.outputs.extrait || steps.verifier1.outputs.extrait }}
+        FICHIER_EXECUTION: ${{ steps.claude2.outcome != 'skipped' && steps.claude2.outputs.execution_file || steps.claude1.outputs.execution_file }}
         RELECTEUR: ${{ github.actor }}
       run: node "$GITHUB_ACTION_PATH/scripts/conclure.js"
 

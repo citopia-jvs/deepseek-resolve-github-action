@@ -12,9 +12,12 @@
 //
 // Bibliothèque standard uniquement, CommonJS : aucune dépendance.
 
+const fs = require('node:fs');
+
 const { git, etatFichiers } = require('./lib/git.js');
 const { gh } = require('./lib/gh.js');
 const { estCheminInterdit, normaliser } = require('./lib/chemins.js');
+const { masquerSecrets, nettoyerTexteTiers, tronquer } = require('./lib/texte.js');
 const {
   lireEnv,
   journaliser,
@@ -28,6 +31,7 @@ const {
 } = require('./lib/action.js');
 
 const LOGIN_VALIDE = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+const LONGUEUR_MAX_REPONSE = 3000;
 
 function lireConfiguration() {
   const numeroPr = Number(lireEnv('NUMERO_PR'));
@@ -46,6 +50,7 @@ function lireConfiguration() {
     issueClaude: lireEnv('ISSUE_CLAUDE'),
     extrait: process.env.EXTRAIT || '',
     relecteur: lireEnv('RELECTEUR'),
+    fichierExecution: lireEnv('FICHIER_EXECUTION'),
   });
 }
 
@@ -112,6 +117,26 @@ function commiter(config) {
   return { commite: true, refuses, motif: '' };
 }
 
+/**
+ * Dernière réponse du modèle, lue dans le journal de session de
+ * claude-code-action. En mode agent, l'action ne la publie nulle part : sans
+ * elle, une explication comme « il faut modifier package.json à la main » se
+ * perdrait. Texte du modèle, donc nettoyé, masqué et borné avant publication.
+ */
+function reponseDuModele(config) {
+  if (config.fichierExecution === '') return '';
+  try {
+    const messages = JSON.parse(fs.readFileSync(config.fichierExecution, 'utf8'));
+    const fin = Array.isArray(messages) ? messages.filter((m) => m && m.type === 'result').pop() : null;
+    let texte = fin && typeof fin.result === 'string' ? fin.result : '';
+    if (config.jetonGh !== '') texte = texte.split(config.jetonGh).join('***');
+    return tronquer(masquerSecrets(nettoyerTexteTiers(texte)).trim(), LONGUEUR_MAX_REPONSE);
+  } catch (err) {
+    avertir(`Journal de session illisible : ${err && err.message ? err.message : err}`);
+    return '';
+  }
+}
+
 function commenter(config, lignes) {
   gh(['pr', 'comment', String(config.numeroPr), '--repo', config.depot, '--body', lignes.join('\n')],
     { tolererEchec: true });
@@ -169,6 +194,10 @@ function principal() {
       lignes.push('<details><summary>Fin de la sortie de la validation</summary>', '', '````text',
         config.extrait.replace(/````/g, '```'), '````', '', '</details>');
     }
+  }
+  const reponse = reponseDuModele(config);
+  if (reponse !== '') {
+    lignes.push('', '<details><summary>Dernière réponse du modèle</summary>', '', reponse, '', '</details>');
   }
   commenter(config, lignes);
   ecrireSorties({ succes: succes ? 'true' : 'false' });
