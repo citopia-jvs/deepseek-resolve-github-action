@@ -1031,7 +1031,7 @@ test('le lecteur de tables du contrat refuse un alignement de colonnes en le nom
 
   // Hors portée : la table des inputs. Une seule ligne visée, et son existence est contrôlée
   // — sans quoi « aucune ligne alignée » rendrait ce cas vert pour rien.
-  const uneLigneDesInputs = /^\| `deepseek-api-key` \|/;
+  const uneLigneDesInputs = /^\| `scaleway-api-key` \|/;
   assert.equal(compte(uneLigneDesInputs), 1, 'la table des « Inputs de action.yml » a changé de forme');
   assert.doesNotThrow(
     () => verifierLesTablesLues(aligner(uneLigneDesInputs)),
@@ -1895,8 +1895,8 @@ test('le job suites contrôle l’existence des neuf suites recensées par le co
   // signaler sa propre disparition.
   assert.equal(
     SUITES_CONTRAT.length,
-    9,
-    'plan/contrat.md doit recenser neuf suites, celle-ci comprise',
+    8,
+    'plan/contrat.md doit recenser huit suites, celle-ci comprise',
   );
   const corps = corpsDuRun(stepUnique('suites', '-f "$suite"', 'contrôler l’existence des suites'));
   const nommees = [...corps.matchAll(/test\/[A-Za-z0-9_.-]+\.test\.js/g)].map((m) => m[0]);
@@ -1953,16 +1953,12 @@ test('le step d’existence des suites porte un ::error:: et une sortie qui peut
 // 12 — les trappes de test restent fermées
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('la CI ne pose ni GH_CLI, ni AIDER_CLI, ni AIDER_STUB_*', () => {
-  // Mesuré : les poser ne change RIEN —
-  // `AIDER_CLI=/bin/true GH_CLI=/bin/true node test/boucle.test.js` rend 58/58,
-  // parce que chaque suite construit l'environnement des sous-processus qu'elle
-  // lance au lieu d'hériter du sien. Une variable d'environnement sans effet est
-  // pire qu'absente : elle fait croire que la CI pilote les stubs, alors que c'est
-  // le harnais qui les pilote — dont le cas
-  // « R7 — sans AIDER_CLI, la trappe AIDER_STUB_* est FERMÉE », qui vérifie
-  // l'inverse et rougirait si la CI posait `AIDER_CLI`.
-  for (const nom of ['GH_CLI', 'AIDER_CLI', 'AIDER_STUB']) {
+test('la CI ne pose pas GH_CLI', () => {
+  // Mesuré : la poser ne change RIEN, parce que chaque suite construit
+  // l'environnement des sous-processus qu'elle lance au lieu d'hériter du sien. Une
+  // variable d'environnement sans effet est pire qu'absente : elle fait croire que la
+  // CI pilote les stubs, alors que c'est le harnais qui les pilote.
+  for (const nom of ['GH_CLI']) {
     assert.equal(
       new RegExp(`\\b${nom}`).test(TEXTE),
       false,
@@ -1972,7 +1968,7 @@ test('la CI ne pose ni GH_CLI, ni AIDER_CLI, ni AIDER_STUB_*', () => {
   for (const [index, { job, step }] of TOUS_LES_STEPS.entries()) {
     for (const cle of step.env ? step.env.keys() : []) {
       assert.equal(
-        /^(GH_CLI|AIDER_CLI|AIDER_STUB)/.test(cle),
+        /^GH_CLI/.test(cle),
         false,
         `le step « ${nomDuStep(job, step, index)} » câble la trappe de test « ${cle} »`,
       );

@@ -145,6 +145,15 @@ const INTERDITS = [
   '.env',
   '.env.local',
   '.env.production',
+
+  // ── Claude Code ────────────────────────────────────────────────────────────
+  // Relus à chaque session : un fichier déposé ici piloterait le passage suivant.
+  '.claude/settings.json',
+  '.claude/agents/piege.md',
+  'CLAUDE.md',
+  'docs/CLAUDE.md',
+  'CLAUDE.local.md',
+  '.mcp.json',
 ];
 
 // Refusés par le PREMIER SEGMENT et non par le nom de fichier : `cache.db` ne
