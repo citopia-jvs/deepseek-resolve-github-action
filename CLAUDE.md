@@ -31,7 +31,7 @@ seule (voir « Architecture »).
 # syntaxe — un appel par fichier, jamais -exec
 find scripts test -name '*.js' -print0 | xargs -0 -n1 node --check
 
-# les sept suites, hors ligne, sans clé API ni réseau
+# toutes les suites, hors ligne, sans clé API ni réseau
 for suite in test/*.test.js; do node "$suite"; done
 ```
 
@@ -47,8 +47,9 @@ utilise cette même forme, et `test/ci.test.js` l'y épingle jeton par jeton —
 **rien ne lit ce fichier-ci** : aucun test ne contrôle que les deux restent d'accord.
 Éditer le tube du workflow oblige donc à revenir corriger ce bloc à la main.
 
-Les suites sont **sept** : `chemins`, `texte`, `garde`, `boucle`, `action`,
-`compte-rendu`, `ci`. Les lancer par le glob `test/*.test.js`, jamais par une liste de
+Les suites sont celles de « Suites de test du dépôt » dans `plan/contrat.md` :
+`chemins`, `texte`, `garde`, `boucle`, `action`, `compte-rendu`, `ci`, plus
+`traduction` et `proxy` pour le proxy Scaleway. Les lancer par le glob `test/*.test.js`, jamais par une liste de
 noms écrite à la main — une suite ajoutée doit être exercée sans que personne y pense,
 et une liste recopiée ici serait périmée au lot suivant. Ne pas maintenir de compte
 — de cas de test, de steps, d'inputs, d'outputs ou de jobs — nulle part dans ce
@@ -74,7 +75,8 @@ aider-models.json         # métadonnées des modèles DeepSeek, absents de lite
 scripts/garde.js          # événement, autorisation, anti-rejeu — tourne avant l'install d'aider
 scripts/resolve.js        # préparation de la branche, primitives, orchestration de la boucle
 scripts/rendre-compte.js  # step if: always() — compte rendu, y compris quand resolve.js est mort
-scripts/lib/              # gh.js, git.js, chemins.js, texte.js — stdlib seule
+scripts/proxy.js          # proxy local Anthropic → OpenAI (Claude Code + Scaleway), pas encore branché
+scripts/lib/              # gh.js, git.js, chemins.js, texte.js, traduction.js — stdlib seule
 __fixtures__/             # payloads d'événements + stubs gh et aider
 test/                     # les suites, lancées par le glob test/*.test.js
 .github/workflows/test.yml # la CI du dépôt : plusieurs jobs, hors ligne
@@ -123,7 +125,7 @@ Deux suites s'appuient dessus, et **pas de la même façon** — la distinction 
 
 - `test/ci.test.js` **lit le fichier** et compare, donc il rougit dès que le workflow et
   le contrat divergent, y compris sur la forme exacte des tableaux qu'il analyse (la
-  liste des sept suites, la version et le condensat d'`actionlint`, les identifiants de
+  liste des suites, la version et le condensat d'`actionlint`, les identifiants de
   jobs). Aligner le contrat suffit à le faire repasser au vert, et le casser suffit à le
   faire rougir ;
 - `test/action.test.js`, lui, **transcrit** les tables du contrat en dur dans son code —

@@ -1887,7 +1887,7 @@ test('le job suites lance les suites par le glob test/*.test.js, sans nullglob',
   );
 });
 
-test('le job suites contrôle l’existence des sept suites recensées par le contrat', () => {
+test('le job suites contrôle l’existence des neuf suites recensées par le contrat', () => {
   // Le sens inverse : un glob ne peut pas voir une suite SUPPRIMÉE ou RENOMMÉE, il
   // lance ce qu'il trouve et se tait. La liste est donc comparée à celle de
   // « Suites de test du dépôt » de plan/contrat.md — seul endroit qui les recense —,
@@ -1895,8 +1895,8 @@ test('le job suites contrôle l’existence des sept suites recensées par le co
   // signaler sa propre disparition.
   assert.equal(
     SUITES_CONTRAT.length,
-    7,
-    'plan/contrat.md doit recenser sept suites, celle-ci comprise',
+    9,
+    'plan/contrat.md doit recenser neuf suites, celle-ci comprise',
   );
   const corps = corpsDuRun(stepUnique('suites', '-f "$suite"', 'contrôler l’existence des suites'));
   const nommees = [...corps.matchAll(/test\/[A-Za-z0-9_.-]+\.test\.js/g)].map((m) => m[0]);

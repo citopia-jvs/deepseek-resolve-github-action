@@ -91,6 +91,22 @@ probable de tout le plan.
 | `GH_CLI`, `AIDER_CLI` | tests seulement — binaires injectables |
 | `AIDER_STUB_*` | tests seulement — pilotage du stub aider, héritées **uniquement si `AIDER_CLI` est posée** (voir ci-dessous) |
 
+### `proxy.js`
+
+Traducteur local Anthropic Messages → OpenAI Chat Completions, pour brancher Claude
+Code sur un modèle Scaleway. Ajouté par la refonte « Claude Code + Scaleway » ; il
+n'est encore appelé par aucun step de `action.yml`.
+
+| Variable | Rôle |
+| --- | --- |
+| `SCW_MODELE` | modèle amont, **imposé à toutes les requêtes** ; le modèle demandé par le client est journalisé, jamais transmis. Obligatoire |
+| `SCW_BASE_URL` | base de l'API amont, défaut `https://api.scaleway.ai/v1` |
+| `SCW_CLE_FICHIER` | **chemin** d'un fichier contenant la clé amont, lu une fois au démarrage. Obligatoire. Jamais la clé elle-même en variable : sur Linux, `/proc/<pid>/environ` est lisible par tout processus du même utilisateur, donc par le Bash de l'agent |
+| `PROXY_JETON` | jeton exigé du client, en `x-api-key` ou `Authorization: Bearer`. Obligatoire |
+| `PROXY_PORT` | port d'écoute, sur `127.0.0.1` seulement. Défaut `4000` ; `0` laisse le système choisir, et le port réel est écrit sur la première ligne de la sortie standard |
+| `PLAFOND_MAX_TOKENS` | borne supérieure de `max_tokens`, défaut `16384` |
+| `INTERVALLE_PING_MS` | intervalle des `ping` SSE, défaut `10000` |
+
 ### `rendre-compte.js`
 
 | Variable | Source |
@@ -375,6 +391,15 @@ nettoyerTexteTiers(s)                              // retire commentaires HTML, 
 masquerSecrets(s)                                  // motifs de jetons -> [SECRET RETIRÉ]
 tronquer(s, n)                                     // tête + queue — jamais la tête seule, même si n
                                                    // est trop petit pour un marqueur
+// traduction.js — Anthropic Messages ↔ OpenAI Chat Completions, fonctions pures
+requeteVersOpenAI(corps, { modele, plafondMaxTokens })  // corps Anthropic -> corps OpenAI
+reponseVersAnthropic(corps, modeleDemande)         // réponse OpenAI complète -> message Anthropic
+creerTraducteurFlux(modeleDemande)                 // { morceau(chunk) -> evenements[],
+                                                   //   fin() -> evenements[] }
+                                                   // un événement : { type, ...données } — le
+                                                   // `type` est aussi le nom SSE
+erreurVersAnthropic(statut, texte)                 // { type: 'error', error: { type, message } }
+                                                   // message amont recopié, jamais réécrit
 ```
 
 ## Objet `preparation` rendu par `preparer()` (lot 3a)
@@ -620,6 +645,8 @@ en `node test/<nom>` — pas de runner de test, pas de dépendance.
 | `test/compte-rendu.test.js` | `scripts/rendre-compte.js` | 4 |
 | `test/action.test.js` | `action.yml` — cohérence statique | 4 |
 | `test/ci.test.js` | `.github/workflows/test.yml` — cohérence statique | 5 |
+| `test/traduction.test.js` | `scripts/lib/traduction.js` | proxy |
+| `test/proxy.test.js` | `scripts/proxy.js` — faux amont local, hors ligne | proxy |
 
 Le job `suites` les lance par le glob `test/*.test.js` : la liste ci-dessus n'est donc
 pas ce qui décide de ce qui tourne, seulement ce dont la disparition est signalée.
