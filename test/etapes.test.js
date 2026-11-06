@@ -185,7 +185,7 @@ test('preparer : consigne restreinte, le commentaire est la consigne et le corps
   const evenement = {
     action: 'created',
     issue: ISSUE,
-    comment: { body: '@dseek corrige seulement calcul.js', user: { login: 'bob' } },
+    comment: { body: '@agent corrige seulement calcul.js', user: { login: 'bob' } },
   };
   const r = lancer('preparer.js', depot, envPreparer(depot, evenement, { CONSIGNE_RESTREINTE: 'true' }));
   assert.equal(r.status, 0, r.stdout + r.stderr);

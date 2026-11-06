@@ -27,7 +27,7 @@ const {
   SANS_HOOKS,
 } = require('./lib/action.js');
 
-const MENTION = '@dseek';
+const MENTION = '@agent';
 const MOTIF_BRANCHE = /^fix-issue-\d+$/;
 const LONGUEUR_MAX_TITRE = 200;
 const LONGUEUR_MAX_CORPS = 20000;
@@ -142,7 +142,7 @@ function neutraliser(texte) {
  * Rédige la consigne passée à claude-code-action.
  *
  * Seul le texte dont la garde a vérifié l'auteur devient une instruction : le
- * corps de l'issue sur un événement `issues`, le commentaire après `@dseek` sur
+ * corps de l'issue sur un événement `issues`, le commentaire après `@agent` sur
  * un `issue_comment`. Le reste est présenté comme des données. Tous les textes
  * sont passés par `nettoyerTexteTiers` : un commentaire HTML, invisible dans le
  * rendu GitHub, n'atteint pas le modèle.

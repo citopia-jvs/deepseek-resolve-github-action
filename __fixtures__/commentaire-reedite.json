@@ -2,7 +2,7 @@
   "action": "edited",
   "changes": {
     "body": {
-      "from": "@dseek corrige le test unitaire."
+      "from": "@agent corrige le test unitaire."
     }
   },
   "issue": {
@@ -11,7 +11,7 @@
   },
   "comment": {
     "id": 2004,
-    "body": "@dseek corrige le test unitaire, et aussi le linter.",
+    "body": "@agent corrige le test unitaire, et aussi le linter.",
     "user": { "login": "mainteneuse" },
     "author_association": "OWNER"
   }

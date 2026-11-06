@@ -5,7 +5,7 @@ GitHub Action qui tente de résoudre automatiquement une issue avec
 [Scaleway Generative APIs](https://www.scaleway.com/fr/generative-apis/) par un
 petit proxy livré avec l'action.
 
-Quand une issue — ou un commentaire d'issue — contient `@dseek`, écrit par quelqu'un
+Quand une issue — ou un commentaire d'issue — contient `@agent`, écrit par quelqu'un
 qui a le droit d'écriture, l'action déroule tout le processus :
 
 1. **prise en compte** : un commentaire sur l'issue annonce la pull request ;
@@ -15,7 +15,7 @@ qui a le droit d'écriture, l'action déroule tout le processus :
 5. **vérification** : l'action lance elle-même la commande de validation. Si elle
    échoue, Claude Code reçoit la sortie des tests et a **une** seconde chance ;
 6. **demande de revue** : tests verts, la PR passe en « prête » et la revue est
-   demandée à l'auteur du `@dseek`. Tests rouges après deux passages, le travail est
+   demandée à l'auteur du `@agent`. Tests rouges après deux passages, le travail est
    quand même poussé et la PR reste en brouillon, avec un commentaire qui dit
    pourquoi.
 
@@ -30,7 +30,7 @@ bouge plus.
 
 ## Utilisation
 
-Dans le dépôt à équiper, créer `.github/workflows/dseek.yml` :
+Dans le dépôt à équiper, créer `.github/workflows/agent.yml` :
 
 ```yaml
 on:
@@ -45,14 +45,14 @@ permissions:
   issues: write
 
 concurrency:
-  group: dseek-${{ github.event.issue.number }}
+  group: agent-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   resoudre:
     if: >-
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@dseek')) ||
-      (github.event_name == 'issues' && contains(github.event.issue.body, '@dseek'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@agent')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '@agent'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -77,13 +77,13 @@ Points de cet exemple qui ne sont pas des préférences de style :
   écrit par le modèle. L'action refuse de démarrer dans ce cas, avec un message qui
   le dit.
 - **`runs-on: ubuntu-24.04` en dur.** L'action n'est vérifiée que sur cette image.
-- **Le bloc `concurrency`.** Deux `@dseek` rapprochés sur la même issue lanceraient
+- **Le bloc `concurrency`.** Deux `@agent` rapprochés sur la même issue lanceraient
   deux jobs sur la même branche. Une composite action ne peut pas porter
   `concurrency` elle-même.
 - **Le `if:` du job.** Il évite de démarrer un runner pour chaque commentaire
   ordinaire. Le vrai contrôle reste celui de l'action.
 - **`types: [opened]` et `[created]` seulement, jamais `edited`** : rééditer un vieux
-  commentaire qui contient `@dseek` relancerait un cycle complet.
+  commentaire qui contient `@agent` relancerait un cycle complet.
 
 À savoir aussi :
 
@@ -157,7 +157,7 @@ la porte, puisque le second étage reste exigé.
 
 Elle ne contrôle **pas** le texte. Un inconnu peut glisser une consigne dans un bloc
 `<!-- … -->`, invisible dans le rendu GitHub, qu'un mainteneur fera exécuter en
-commentant `@dseek`. Ce que l'action fait contre ça : la consigne vient du texte de
+commentant `@agent`. Ce que l'action fait contre ça : la consigne vient du texte de
 la personne autorisée, le corps de l'issue est fourni comme donnée délimitée et
 étiquetée non fiable, les commentaires HTML sont retirés, et la consigne exacte est
 publiée dans la PR. **Aucune de ces mesures n'est une barrière.**

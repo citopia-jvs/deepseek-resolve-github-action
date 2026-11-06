@@ -1,5 +1,5 @@
 name: "DeepSeek Auto-Resolve Issue"
-description: "Résout une issue mentionnant @dseek avec Claude Code, branché sur un modèle Scaleway"
+description: "Résout une issue mentionnant @agent avec Claude Code, branché sur un modèle Scaleway"
 author: "Fabien Sanchez"
 
 inputs:
