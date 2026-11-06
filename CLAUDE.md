@@ -171,6 +171,13 @@ Heures de débogage économisées ; aucun ne se devine à la lecture du code seu
   `./.git/**`. Ne pas rendre Bash au modèle pour « qu'il puisse lancer les tests » : un
   test qu'il écrit est du code qui lit l'environnement, et aucune règle `deny` ne filtre
   ce que fait le code lancé. Les tests, c'est `verifier.js`.
+- **Les hooks du dépôt consommateur sont désactivés** (`"disableAllHooks": true`).
+  Mesuré en local : sans ce réglage, Claude Code lance les hooks de
+  `.claude/settings.json` du dépôt, jeton GitHub dans leur environnement, et un hook
+  peut appeler un fichier que le modèle vient d'écrire. Ne pas le retirer pour « laisser
+  tourner le formateur du projet ». Entre deux passages, `verifier.js` remet `.claude/`,
+  `.mcp.json` et `CLAUDE.md` à l'état du commit : un test pourrait y déposer de quoi
+  piloter le second passage.
 - **`.git/config` est restauré depuis la sauvegarde de `preparer.js`**, avant et après
   les tests, et au début de `conclure.js`. Avant : effacer le jeton que
   claude-code-action y a mis. Après : défaire ce qu'un test a pu y poser
