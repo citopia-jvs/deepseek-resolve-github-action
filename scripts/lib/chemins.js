@@ -31,6 +31,9 @@ const REPERTOIRES_INTERDITS = [
   '.husky',
   '.devcontainer',
   '.git',
+  // Claude Code relit sa configuration de projet à chaque session : un fichier
+  // déposé ici piloterait le passage suivant, ou les sessions d'un humain.
+  '.claude',
 ];
 
 // Chemins complets, ancrés à la racine du dépôt.
@@ -105,6 +108,10 @@ const NOMS_INTERDITS = [
   '.aider*',
   '.env',
   '.env.*',
+  // Claude Code — même raison que `.claude/`.
+  'CLAUDE.md',
+  'CLAUDE.local.md',
+  '.mcp.json',
 ];
 
 const CARACTERES_REGEX = '\\^$.|?+()[]{}';

@@ -1,10 +1,9 @@
 # Contrôles du dépôt de l'action elle-même.
 #
 # Ce que cette CI ne prouve pas, et qui reste à la vérification de bout en bout :
-# la boucle avec un vrai modèle, et l'exécution effective du step `if: always()`
-# dans un job déjà rouge. Aucune clé DeepSeek n'est déposée dans les secrets de ce
-# dépôt : un workflow déclenché depuis une PR de fork y aurait accès dans certaines
-# configurations.
+# l'appel réel à claude-code-action et au modèle : les smokes s'arrêtent à la garde.
+# Aucune clé Scaleway n'est déposée dans les secrets de ce dépôt : un workflow
+# déclenché depuis une PR de fork y aurait accès dans certaines configurations.
 name: Contrôles
 
 on:
@@ -32,9 +31,9 @@ jobs:
   # noms des checks obligatoires d'une branche protégée.
   syntaxe:
     name: Syntaxe des scripts et des workflows
-    # En dur, jamais `ubuntu-latest` : celui-ci basculera sur 26.04, dont le Python
-    # 3.14 est hors de la borne `<3.13` d'aider-chat (R11). Les jobs de ce dépôt
-    # doivent tourner sur l'image recommandée aux consommateurs. Mesuré : actionlint
+    # En dur, jamais `ubuntu-latest` : celui-ci changera d'image sans prévenir, et
+    # l'action n'est vérifiée que sur 24.04. Les jobs de ce dépôt doivent tourner
+    # sur l'image recommandée aux consommateurs. Mesuré : actionlint
     # accepte `ubuntu-latest` sans un mot, dans les quatre jobs — ces quatre lignes ne
     # tiennent qu'à la relecture.
     runs-on: ubuntu-24.04
@@ -117,10 +116,11 @@ jobs:
             test/chemins.test.js \
             test/texte.test.js \
             test/garde.test.js \
-            test/boucle.test.js \
-            test/compte-rendu.test.js \
+            test/etapes.test.js \
             test/action.test.js \
-            test/ci.test.js
+            test/ci.test.js \
+            test/traduction.test.js \
+            test/proxy.test.js
           do
             if [ ! -f "$suite" ]; then
               echo "::error::suite recensée dans plan/contrat.md absente du dépôt : $suite"
@@ -139,10 +139,8 @@ jobs:
         # Pas de `nullglob` : mesuré, sans correspondance bash passe le motif littéral
         # à `node`, qui rend `MODULE_NOT_FOUND` et un code non nul — « plus aucune
         # suite » est un cas bruyant, pas silencieux.
-        # Ni `GH_CLI` ni `AIDER_CLI` : mesuré, les poser ne change rien, chaque suite
-        # construit l'environnement des sous-processus qu'elle lance au lieu d'hériter
-        # du sien — et `test/boucle.test.js` vérifie justement que la trappe
-        # `AIDER_STUB_*` est **fermée** quand `AIDER_CLI` est absente.
+        # Pas de `GH_CLI` : mesuré, la poser ne change rien, chaque suite construit
+        # l'environnement des sous-processus qu'elle lance au lieu d'hériter du sien.
         run: |
           for suite in test/*.test.js; do
             echo "── $suite"
@@ -166,11 +164,10 @@ jobs:
         uses: ./
         with:
           # Clé factice, et elle ne part nulle part : l'événement est `push` ou
-          # `pull_request`, la liste blanche d'événements de la garde refuse, aider
-          # n'est jamais installé. `github-token` n'est pas passé — son défaut
-          # `${{ github.token }}` suffit, et ce job le vérifie.
-          deepseek-api-key: factice
-          no-publish: "true"
+          # `pull_request`, la liste blanche d'événements de la garde refuse, et
+          # aucun step suivant ne tourne. `github-token` n'est pas passé — son
+          # défaut `${{ github.token }}` suffit, et ce job le vérifie.
+          scaleway-api-key: factice
 
       - name: Contrôler les sorties remontées par l'action
         # Les valeurs passent par `env:` et jamais par `${{ … }}` dans le corps du
@@ -189,16 +186,16 @@ jobs:
             echo "::error::poursuivre attendu « false », obtenu « $POURSUIVRE »"
             exit 1
           fi
-          # `succes` et `numero-pr` viennent du step `resoudre`, sauté par le `if:` de
-          # la garde. La sortie d'un step sauté vaut la chaîne vide : les contrôler
+          # `succes` et `numero-pr` viennent des steps `conclure` et `preparer`,
+          # sautés par le `if:` de la garde. La sortie d'un step sauté vaut la chaîne vide : les contrôler
           # prouve que le bloc `outputs:` se résout **quand même**, au lieu de faire
           # échouer le montage de l'action.
           if [ -n "$SUCCES" ]; then
-            echo "::error::succes attendu vide (step resoudre sauté), obtenu « $SUCCES »"
+            echo "::error::succes attendu vide (step conclure sauté), obtenu « $SUCCES »"
             exit 1
           fi
           if [ -n "$NUMERO_PR" ]; then
-            echo "::error::numero-pr attendu vide (step resoudre sauté), obtenu « $NUMERO_PR »"
+            echo "::error::numero-pr attendu vide (step preparer sauté), obtenu « $NUMERO_PR »"
             exit 1
           fi
           echo "Sorties conformes : poursuivre=false, succes et numero-pr vides."
@@ -233,8 +230,7 @@ jobs:
       - id: action
         uses: ./copie-action
         with:
-          deepseek-api-key: factice
-          no-publish: "true"
+          scaleway-api-key: factice
 
       - name: Contrôler la sortie poursuivre
         env:

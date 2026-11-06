@@ -171,14 +171,16 @@ function mappingImbrique(lignes, indent) {
  * Chaque step est rendu sous la forme
  * `{ cles: Map, env: Map|null, avec: Map|null }`. Indentations attendues :
  * `    - cle: valeur` pour l'item, `      cle: valeur` pour ses autres clés,
- * `        CLE: valeur` pour les sous-clés de `env:` et de `with:`, et un bloc
- * scalaire `run: |` dont le contenu est à huit espaces ou plus.
+ * `        CLE: valeur` pour les sous-clés de `env:` et de `with:`, un bloc
+ * scalaire `run: |` dont le contenu est à huit espaces ou plus, et un bloc scalaire
+ * de sous-clé (`settings: |` sous `with:`) dont le contenu est à dix espaces ou plus.
  */
 function analyserSteps(lignes) {
   const steps = [];
   let courant = null;
   let imbrique = null;
   let bloc = null; // { cle, lignes }
+  let sousBloc = null; // { cle, lignes, carte }
 
   const cloreBloc = () => {
     if (bloc) {
@@ -212,7 +214,21 @@ function analyserSteps(lignes) {
     courant.cles.set(cle, valeurScalaire(valeur));
   };
 
+  const cloreSousBloc = () => {
+    if (sousBloc) {
+      sousBloc.carte.set(sousBloc.cle, sousBloc.lignes.join('\n'));
+      sousBloc = null;
+    }
+  };
+
   for (const ligne of lignes) {
+    if (sousBloc !== null) {
+      if (ligne.trim() === '' || ligne.startsWith(' '.repeat(10))) {
+        sousBloc.lignes.push(ligne.slice(10));
+        continue;
+      }
+      cloreSousBloc();
+    }
     if (bloc !== null) {
       if (ligne.trim() === '' || ligne.startsWith(' '.repeat(8))) {
         bloc.lignes.push(ligne.slice(8));
@@ -242,11 +258,16 @@ function analyserSteps(lignes) {
       }
       const c = m[1].match(/^([A-Za-z0-9_.-]+):(.*)$/);
       if (!c) throw new Error(`sous-clé non lisible : ${JSON.stringify(ligne)}`);
+      if (['|', '|-', '>', '>-'].includes(c[2].trim())) {
+        sousBloc = { cle: c[1], lignes: [], carte: imbrique };
+        continue;
+      }
       imbrique.set(c[1], valeurScalaire(c[2]));
       continue;
     }
     throw new Error(`ligne de step non lisible par ce harnais : ${JSON.stringify(ligne)}`);
   }
+  cloreSousBloc();
   cloreBloc();
   return steps;
 }
@@ -272,7 +293,13 @@ function nomDuStep(step, index) {
   return step.cles.get('id') || step.cles.get('uses') || scriptDuStep(step) || `step #${index + 1}`;
 }
 
-const CONDITION_GARDE = "steps.garde.outputs.poursuivre == 'true'";
+
+/** Le step d'identifiant `id`, qui doit exister. */
+function stepParId(id) {
+  const step = STEPS.find((s) => s.cles.get('id') === id);
+  assert.ok(step, `aucun step d'id « ${id} » dans action.yml`);
+  return step;
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 1 — `runs`
@@ -281,17 +308,11 @@ const CONDITION_GARDE = "steps.garde.outputs.poursuivre == 'true'";
 test('runs déclare using: composite et n’a que les clés using et steps', () => {
   assert.equal(RUNS.get('using'), 'composite');
   // Le schéma `composite-runs` ne connaît que `{using, steps}` : ni `main:`, ni
-  // `pre:`, ni `post:`. Un `post:` accepté à la lecture serait ignoré à
-  // l'exécution, et le compte rendu de R12 ne partirait jamais.
+  // `pre:`, ni `post:`. Une clé acceptée à la lecture serait ignorée à l'exécution.
   assert.deepEqual([...RUNS.keys()].sort(), ['steps', 'using']);
-
-  // Motifs ANCRÉS et appliqués au texte sans commentaires : `/post:/` matcherait
-  // le mot dans un commentaire, `/timeout-minutes:/` matcherait l'input
-  // `aider-call-timeout-minutes:`.
   for (const cle of ['main', 'pre', 'post', 'pre-if', 'post-if', 'timeout-minutes']) {
-    const motif = new RegExp(`^[ \\t]*${cle}:`, 'm');
     assert.equal(
-      motif.test(TEXTE),
+      new RegExp(`^[ \\t]*${cle}:`, 'm').test(TEXTE),
       false,
       `la clé « ${cle}: » n'existe pas dans une composite action : elle serait ` +
         `ignorée à l'exécution sans aucun message`,
@@ -307,51 +328,33 @@ test('runs déclare using: composite et n’a que les clés using et steps', () 
 // valeur. `defaut: null` = AUCUNE clé `default:`, ce qui n'est pas la même chose
 // qu'un défaut vide.
 const INPUTS_ATTENDUS = [
-  { nom: 'deepseek-api-key', requis: 'true', defaut: null },
+  { nom: 'scaleway-api-key', requis: 'true', defaut: null },
+  { nom: 'scaleway-base-url', requis: 'false', defaut: 'https://api.scaleway.ai/v1' },
+  { nom: 'model', requis: 'false', defaut: 'glm-5.3' },
+  { nom: 'context-window', requis: 'false', defaut: '256000' },
+  { nom: 'max-turns', requis: 'false', defaut: '30' },
   { nom: 'github-token', requis: 'false', defaut: '${{ github.token }}' },
-  { nom: 'max-iterations', requis: 'false', defaut: '2' },
   { nom: 'validation-command', requis: 'false', defaut: 'npm test' },
   { nom: 'base-branch', requis: 'false', defaut: '' },
-  { nom: 'model', requis: 'false', defaut: 'deepseek/deepseek-v4-pro' },
-  { nom: 'aider-version', requis: 'false', defaut: '0.86.2' },
-  { nom: 'python-version', requis: 'false', defaut: '3.12' },
-  { nom: 'map-tokens', requis: 'false', defaut: '2048' },
   { nom: 'allowed-associations', requis: 'false', defaut: 'OWNER,MEMBER,COLLABORATOR' },
   { nom: 'require-trusted-issue-author', requis: 'false', defaut: 'true' },
-  { nom: 'no-publish', requis: 'false', defaut: 'false' },
-  { nom: 'aider-call-timeout-minutes', requis: 'false', defaut: '15' },
 ];
 
-test('les treize inputs du contrat sont déclarés, aucun de plus, aucun de moins', () => {
-  assert.deepEqual(
-    [...INPUTS.keys()].sort(),
-    INPUTS_ATTENDUS.map((i) => i.nom).sort(),
-  );
+test('les inputs du contrat sont déclarés, aucun de plus, aucun de moins', () => {
+  assert.deepEqual([...INPUTS.keys()].sort(), INPUTS_ATTENDUS.map((i) => i.nom).sort());
 });
 
 test('required et default de chaque input sont exactement ceux du contrat', () => {
   for (const attendu of INPUTS_ATTENDUS) {
     const declare = INPUTS.get(attendu.nom);
     assert.ok(declare, `input « ${attendu.nom} » absent`);
-    assert.equal(
-      declare.get('required'),
-      attendu.requis,
-      `required de « ${attendu.nom} »`,
-    );
+    assert.equal(declare.get('required'), attendu.requis, `required de « ${attendu.nom} »`);
     if (attendu.defaut === null) {
-      // `deepseek-api-key` : `required: true` ET un défaut serait contradictoire,
-      // et un défaut vide ferait échouer l'appel à aider avec une erreur d'API
-      // plutôt qu'un message clair.
-      assert.equal(
-        declare.has('default'),
-        false,
-        `« ${attendu.nom} » ne doit porter AUCUN default`,
-      );
+      assert.equal(declare.has('default'), false, `« ${attendu.nom} » ne doit porter AUCUN default`);
     } else {
       assert.equal(declare.get('default'), attendu.defaut, `default de « ${attendu.nom} »`);
     }
-    // Un input sans `description` est refusé par le linter d'actions et n'apparaît
-    // pas dans l'aide du Marketplace. On contrôle sa PRÉSENCE, jamais son texte.
+    // On contrôle la PRÉSENCE de la description, jamais son texte.
     assert.ok(declare.has('description'), `« ${attendu.nom} » n'a pas de description`);
   }
 });
@@ -362,71 +365,56 @@ test('required et default de chaque input sont exactement ceux du contrat', () =
 
 test('chaque input déclaré est utilisé, et chaque inputs.<nom> utilisé est déclaré', () => {
   // LE contrôle qui attrape `${{ inputs.mdel }}`. Une expression qui désigne un
-  // input inexistant ne lève pas : elle s'évalue en CHAÎNE VIDE. Le job passe au
-  // vert, `MODELE` vaut '', et aider est appelé sans modèle. Rien d'autre dans ce
-  // dépôt ne rougit sur cette faute de frappe.
+  // input inexistant ne lève pas : elle s'évalue en CHAÎNE VIDE, sans erreur.
   const utilises = new Set();
   for (const m of TEXTE.matchAll(/inputs\.([A-Za-z0-9_-]+)/g)) utilises.add(m[1]);
   const declares = new Set(INPUTS.keys());
-
   const jamaisUtilises = [...declares].filter((nom) => !utilises.has(nom)).sort();
   const jamaisDeclares = [...utilises].filter((nom) => !declares.has(nom)).sort();
-
-  assert.deepEqual(
-    jamaisDeclares,
-    [],
-    `${JSON.stringify(jamaisDeclares)} est interpolé mais n'est pas déclaré dans ` +
-      `inputs: — ces expressions s'évaluent en chaîne vide, sans erreur`,
-  );
-  assert.deepEqual(
-    jamaisUtilises,
-    [],
-    `${JSON.stringify(jamaisUtilises)} est déclaré mais jamais interpolé — soit un ` +
-      `env: manquant, soit un input mort`,
-  );
+  assert.deepEqual(jamaisDeclares, [], `${JSON.stringify(jamaisDeclares)} est interpolé mais pas déclaré`);
+  assert.deepEqual(jamaisUtilises, [], `${JSON.stringify(jamaisUtilises)} est déclaré mais jamais interpolé`);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 5 — les outputs, et les steps qu'ils désignent
+// 5 — les outputs, et les sorties de steps citées
 // ═════════════════════════════════════════════════════════════════════════════
 
-const OUTPUTS_ATTENDUS = ['poursuivre', 'numero-pr', 'branche', 'iterations', 'succes'];
+const OUTPUTS_ATTENDUS = ['poursuivre', 'branche', 'numero-pr', 'succes'];
 
-// Sorties écrites par chaque script, d'après `plan/contrat.md`.
-const SORTIES_PAR_SCRIPT = new Map([
+// Sorties de chaque step, d'après `plan/contrat.md` (et `execution_file` pour
+// claude-code-action, d'après son propre action.yml).
+const SORTIES_PAR_STEP = new Map([
   ['garde', ['poursuivre', 'issue', 'branche', 'motif', 'consigne-restreinte']],
-  ['resoudre', ['numero-pr', 'iterations', 'succes']],
+  ['preparer', ['numero-pr', 'consigne', 'sauvegarde-config']],
+  ['proxy', ['jeton']],
+  ['claude1', ['execution_file']],
+  ['claude2', ['execution_file']],
+  ['verifier1', ['succes', 'consigne-reprise', 'extrait']],
+  ['verifier2', ['succes', 'consigne-reprise', 'extrait']],
+  ['conclure', ['succes']],
 ]);
 
-test('les cinq outputs du contrat sont déclarés et pointent des steps existants', () => {
+test('les outputs du contrat sont déclarés et toute sortie citée existe', () => {
   assert.deepEqual([...OUTPUTS.keys()].sort(), [...OUTPUTS_ATTENDUS].sort());
   for (const nom of OUTPUTS_ATTENDUS) {
     const sortie = OUTPUTS.get(nom);
     assert.ok(sortie.has('description'), `l'output « ${nom} » n'a pas de description`);
-    assert.ok(sortie.has('value'), `l'output « ${nom} » n'a pas de value`);
     assert.match(
-      sortie.get('value'),
+      sortie.get('value') || '',
       /^\$\{\{\s*steps\.[A-Za-z0-9_-]+\.outputs\.[A-Za-z0-9_-]+\s*\}\}$/,
       `la value de l'output « ${nom} » doit lire une sortie de step`,
     );
   }
-
-  // Les identifiants sont RELEVÉS dans le YAML, pas codés en dur : un `id:`
-  // renommé doit faire rougir ce test, pas le laisser passer.
-  const identifiants = new Set(
-    STEPS.map((step) => step.cles.get('id')).filter((id) => typeof id === 'string'),
-  );
-  for (const m of TEXTE.matchAll(/steps\.([A-Za-z0-9_-]+)\.outputs\.([A-Za-z0-9_-]+)/g)) {
-    const [, id, sortie] = m;
-    assert.ok(
-      identifiants.has(id),
-      `« steps.${id}.outputs.${sortie} » désigne un step sans id: « ${id} » — ` +
-        `l'expression s'évaluerait en chaîne vide`,
-    );
-    assert.ok(
-      (SORTIES_PAR_SCRIPT.get(id) || []).includes(sortie),
-      `« ${sortie} » n'est pas une sortie du step « ${id} » d'après plan/contrat.md`,
-    );
+  const identifiants = new Set(STEPS.map((s) => s.cles.get('id')).filter(Boolean));
+  for (const m of TEXTE.matchAll(/steps\.([A-Za-z0-9_-]+)\.(outputs\.([A-Za-z0-9_-]+)|outcome)/g)) {
+    const [, id, , sortie] = m;
+    assert.ok(identifiants.has(id), `« ${m[0]} » désigne un step sans id: « ${id} »`);
+    if (sortie) {
+      assert.ok(
+        (SORTIES_PAR_STEP.get(id) || []).includes(sortie),
+        `« ${sortie} » n'est pas une sortie du step « ${id} » d'après plan/contrat.md`,
+      );
+    }
   }
 });
 
@@ -434,74 +422,66 @@ test('les cinq outputs du contrat sont déclarés et pointent des steps existant
 // 6 — le câblage `env:` step par step
 // ═════════════════════════════════════════════════════════════════════════════
 
-// Les trois tables « Variables d'environnement lues par les scripts » du contrat,
-// moins les variables fournies par le runner (`GITHUB_*`) et moins les trappes de
-// test (`GH_CLI`, `AIDER_CLI`, `AIDER_STUB_*`), qui n'ont RIEN à faire ici — voir
-// le test suivant.
+// Les tables « Variables d'environnement lues par les scripts » du contrat, moins
+// les variables du runner et moins la trappe de test `GH_CLI`. Indexées par `id`
+// de step : `verifier.js` tourne deux fois, avec deux `PASSAGE` différents.
+const SI_PASSAGE_2 = "steps.claude2.outcome != 'skipped'";
 const ENV_ATTENDU = new Map([
-  [
-    'scripts/garde.js',
-    {
-      GH_TOKEN: '${{ inputs.github-token }}',
-      ASSOCIATIONS_AUTORISEES: '${{ inputs.allowed-associations }}',
-      EXIGER_AUTEUR_ISSUE_DE_CONFIANCE: '${{ inputs.require-trusted-issue-author }}',
-    },
-  ],
-  [
-    'scripts/resolve.js',
-    {
-      DEEPSEEK_API_KEY: '${{ inputs.deepseek-api-key }}',
-      GH_TOKEN: '${{ inputs.github-token }}',
-      NUMERO_ISSUE: '${{ steps.garde.outputs.issue }}',
-      BRANCHE: '${{ steps.garde.outputs.branche }}',
-      MODELE: '${{ inputs.model }}',
-      MAX_ITERATIONS: '${{ inputs.max-iterations }}',
-      COMMANDE_VALIDATION: '${{ inputs.validation-command }}',
-      BRANCHE_BASE: '${{ inputs.base-branch }}',
-      MAP_TOKENS: '${{ inputs.map-tokens }}',
-      SANS_PUBLICATION: '${{ inputs.no-publish }}',
-      MINUTES_MAX_APPEL_AIDER: '${{ inputs.aider-call-timeout-minutes }}',
-      CONSIGNE_RESTREINTE: '${{ steps.garde.outputs.consigne-restreinte }}',
-    },
-  ],
-  [
-    'scripts/rendre-compte.js',
-    {
-      GH_TOKEN: '${{ inputs.github-token }}',
-      NUMERO_ISSUE: '${{ steps.garde.outputs.issue }}',
-      BRANCHE: '${{ steps.garde.outputs.branche }}',
-      // Pas de `STATUT_JOB` : retiré avec l'issue #3. `${{ job.status }}` vaut
-      // « success » dans un step qui suit un step de la même composite en échec
-      // (mesuré, run 32380365244), donc elle ne pouvait pas servir de critère de
-      // silence. Le contrat ne la liste plus ; ce test exigeant l'égalité EXACTE
-      // du bloc `env:`, la remettre dans `action.yml` sans l'ajouter ici fait
-      // rougir — et c'est voulu.
-      SANS_PUBLICATION: '${{ inputs.no-publish }}',
-    },
-  ],
+  ['garde', {
+    GH_TOKEN: '${{ inputs.github-token }}',
+    ASSOCIATIONS_AUTORISEES: '${{ inputs.allowed-associations }}',
+    EXIGER_AUTEUR_ISSUE_DE_CONFIANCE: '${{ inputs.require-trusted-issue-author }}',
+  }],
+  ['preparer', {
+    GH_TOKEN: '${{ inputs.github-token }}',
+    NUMERO_ISSUE: '${{ steps.garde.outputs.issue }}',
+    BRANCHE: '${{ steps.garde.outputs.branche }}',
+    BRANCHE_BASE: '${{ inputs.base-branch }}',
+    COMMANDE_VALIDATION: '${{ inputs.validation-command }}',
+    CONSIGNE_RESTREINTE: '${{ steps.garde.outputs.consigne-restreinte }}',
+  }],
+  ['proxy', {
+    SCW_SECRET_KEY: '${{ inputs.scaleway-api-key }}',
+    SCW_MODELE: '${{ inputs.model }}',
+    SCW_BASE_URL: '${{ inputs.scaleway-base-url }}',
+  }],
+  // Pas de GH_TOKEN dans les deux verifier : ils lancent du code écrit par le modèle.
+  ['verifier1', {
+    COMMANDE_VALIDATION: '${{ inputs.validation-command }}',
+    SAUVEGARDE_CONFIG: '${{ steps.preparer.outputs.sauvegarde-config }}',
+    CONSIGNE: '${{ steps.preparer.outputs.consigne }}',
+    PASSAGE: '1',
+  }],
+  ['verifier2', {
+    COMMANDE_VALIDATION: '${{ inputs.validation-command }}',
+    SAUVEGARDE_CONFIG: '${{ steps.preparer.outputs.sauvegarde-config }}',
+    CONSIGNE: '${{ steps.preparer.outputs.consigne }}',
+    PASSAGE: '2',
+  }],
+  ['conclure', {
+    GH_TOKEN: '${{ inputs.github-token }}',
+    NUMERO_ISSUE: '${{ steps.garde.outputs.issue }}',
+    NUMERO_PR: '${{ steps.preparer.outputs.numero-pr }}',
+    BRANCHE: '${{ steps.garde.outputs.branche }}',
+    SAUVEGARDE_CONFIG: '${{ steps.preparer.outputs.sauvegarde-config }}',
+    SUCCES: `\${{ ${SI_PASSAGE_2} && steps.verifier2.outputs.succes || steps.verifier1.outputs.succes }}`,
+    PASSAGES: `\${{ ${SI_PASSAGE_2} && '2' || '1' }}`,
+    ISSUE_CLAUDE: `\${{ ${SI_PASSAGE_2} && steps.claude2.outcome || steps.claude1.outcome }}`,
+    EXTRAIT: `\${{ ${SI_PASSAGE_2} && steps.verifier2.outputs.extrait || steps.verifier1.outputs.extrait }}`,
+    FICHIER_EXECUTION: `\${{ ${SI_PASSAGE_2} && steps.claude2.outputs.execution_file || steps.claude1.outputs.execution_file }}`,
+    RELECTEUR: '${{ github.actor }}',
+  }],
 ]);
 
 test('le bloc env: de chaque step est exactement celui des tables du contrat', () => {
-  // Le cœur de ce harnais. Une composite action n'expose PAS ses inputs en
-  // `INPUT_*` : une variable oubliée ici donne une chaîne vide au script, pas une
-  // erreur. `CONSIGNE_RESTREINTE` manquait dans l'exemple du lot 4 lui-même, et
-  // son absence fait reprendre le corps d'une issue dont la garde venait de juger
-  // l'auteur non autorisé (R6).
+  // Une composite action n'expose PAS ses inputs en `INPUT_*` : une variable
+  // oubliée ici donne une chaîne vide au script, pas une erreur.
   for (const [index, step] of STEPS.entries()) {
-    const script = scriptDuStep(step);
-    const attendu = ENV_ATTENDU.get(script) || {};
+    const attendu = ENV_ATTENDU.get(step.cles.get('id')) || {};
     const obtenu = Object.fromEntries(step.env ? step.env : new Map());
-    assert.deepEqual(
-      obtenu,
-      attendu,
-      `le bloc env: du step « ${nomDuStep(step, index)} » ne correspond pas aux ` +
-        `tables de plan/contrat.md`,
-    );
+    assert.deepEqual(obtenu, attendu, `le bloc env: du step « ${nomDuStep(step, index)} »`);
   }
-  // Et chaque script attendu a bien son step : sans ce contrôle, supprimer un step
-  // entier passerait inaperçu ci-dessus.
-  const scripts = STEPS.map(scriptDuStep).filter((s) => s !== '');
-  assert.deepEqual([...scripts].sort(), [...ENV_ATTENDU.keys()].sort());
+  for (const id of ENV_ATTENDU.keys()) stepParId(id);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -509,137 +489,119 @@ test('le bloc env: de chaque step est exactement celui des tables du contrat', (
 // ═════════════════════════════════════════════════════════════════════════════
 
 test('aucune variable réservée aux tests n’est câblée dans action.yml', () => {
-  // `GH_CLI` et `AIDER_CLI` remplacent les binaires `gh` et `aider` par des stubs,
-  // et `AIDER_CLI` ouvre en plus l'héritage des `AIDER_STUB_*` dans
-  // l'environnement d'aider, qui est sinon une liste blanche stricte (R7). Câblée
-  // ici, n'importe laquelle de ces variables ferait exécuter par l'action un
-  // binaire choisi par le workflow appelant.
-  for (const nom of ['GH_CLI', 'AIDER_CLI', 'AIDER_STUB', 'ACTION_YML']) {
-    assert.equal(
-      new RegExp(`\\b${nom}`).test(TEXTE),
-      false,
-      `« ${nom} » est une trappe de test : elle ne doit apparaître nulle part dans ` +
-        `action.yml`,
-    );
-  }
-  for (const [index, step] of STEPS.entries()) {
-    for (const cle of step.env ? step.env.keys() : []) {
-      assert.equal(
-        /^(GH_CLI|AIDER_CLI|AIDER_STUB)/.test(cle),
-        false,
-        `le step « ${nomDuStep(step, index)} » câble la trappe de test « ${cle} »`,
-      );
-    }
+  // `GH_CLI` remplace le binaire `gh` : câblée ici, elle ferait exécuter par
+  // l'action un binaire choisi par le workflow appelant.
+  for (const nom of ['GH_CLI', 'ACTION_YML']) {
+    assert.equal(new RegExp(`\\b${nom}`).test(TEXTE), false, `« ${nom} » est une trappe de test`);
   }
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// 8 à 12 — forme des steps
+// 8 à 11 — forme et ordre des steps
 // ═════════════════════════════════════════════════════════════════════════════
+
+// Le déroulé de `plan/contrat.md`, dans l'ordre, avec la condition exacte de
+// chaque step. `null` : aucun `if:`.
+const DEROULE = [
+  ['garde', null],
+  ['preparer', "steps.garde.outputs.poursuivre == 'true'"],
+  ['proxy', "steps.preparer.outcome == 'success'"],
+  ['claude1', "steps.proxy.outcome == 'success'"],
+  ['verifier1', "always() && steps.claude1.outcome != 'skipped'"],
+  ['claude2', "always() && steps.verifier1.outputs.succes == 'false'"],
+  ['verifier2', "always() && steps.claude2.outcome != 'skipped'"],
+  ['conclure', "always() && steps.preparer.outputs.numero-pr != ''"],
+];
+
+test('les steps suivent le déroulé du contrat, avec leurs conditions exactes', () => {
+  // Sans `always()`, verifier et conclure ne tourneraient pas après un passage du
+  // modèle en échec : la PR resterait sans commentaire.
+  assert.deepEqual(STEPS.map((s) => s.cles.get('id')), DEROULE.map(([id]) => id));
+  for (const [id, condition] of DEROULE) {
+    const step = stepParId(id);
+    if (condition === null) assert.equal(step.cles.has('if'), false, `« ${id} » ne porte pas de if:`);
+    else assert.equal(step.cles.get('if'), condition, `condition du step « ${id} »`);
+  }
+});
 
 test('chaque step run: déclare shell: bash', () => {
-  // `shell:` est OBLIGATOIRE dans un step `run:` de composite action — contrairement
-  // à un job de workflow, où il est facultatif. L'oubli est silencieux à
-  // l'écriture et fait échouer le chargement de l'action à l'exécution.
-  let comptes = 0;
-  for (const [index, step] of STEPS.entries()) {
-    if (!step.cles.has('run')) continue;
-    comptes += 1;
-    assert.equal(
-      step.cles.get('shell'),
-      'bash',
-      `le step « ${nomDuStep(step, index)} » a un run: sans shell: bash`,
-    );
+  // `shell:` est OBLIGATOIRE dans un step `run:` de composite action.
+  const avecRun = STEPS.filter((s) => s.cles.has('run'));
+  assert.equal(avecRun.length, 6, 'six steps run: attendus');
+  for (const [index, step] of avecRun.entries()) {
+    assert.equal(step.cles.get('shell'), 'bash', `le step « ${nomDuStep(step, index)} » n'a pas shell: bash`);
   }
-  assert.equal(comptes, 4, 'quatre steps run: attendus (garde, pipx, resolve, compte rendu)');
-});
-
-test('les steps 2 à 5 sont conditionnés par la garde, le dernier avec always()', () => {
-  assert.equal(STEPS.length, 5, 'cinq steps attendus');
-  // Le premier step est la garde elle-même : elle ne peut pas dépendre de sa
-  // propre sortie.
-  assert.equal(STEPS[0].cles.has('if'), false, 'le step de garde ne porte pas de if:');
-  for (const index of [1, 2, 3]) {
-    assert.equal(
-      STEPS[index].cles.get('if'),
-      CONDITION_GARDE,
-      `le step « ${nomDuStep(STEPS[index], index)} » doit être conditionné par la garde`,
-    );
-  }
-  // Sans `always() &&`, le compte rendu de secours ne partirait justement PAS dans
-  // les cas pour lesquels il existe : `resolve.js` qui meurt, job annulé,
-  // `timeout-minutes` du consommateur (R12).
-  assert.equal(
-    STEPS[4].cles.get('if'),
-    `always() && ${CONDITION_GARDE}`,
-    'le dernier step doit porter always() en plus de la condition de garde',
-  );
 });
 
 test('tout script est appelé via $GITHUB_ACTION_PATH, jamais par un chemin relatif', () => {
   // En `uses: ./`, `GITHUB_ACTION_PATH` vaut `GITHUB_WORKSPACE` : un chemin relatif
-  // passerait le smoke test du lot 5 et casserait chez tout consommateur, où
-  // l'action est déployée sous `_actions/<owner>/<repo>/<ref>`.
+  // passerait le smoke local et casserait chez tout consommateur.
   const references = [...TEXTE.matchAll(/(\S*)scripts\/[A-Za-z0-9._-]+\.js/g)];
   assert.ok(references.length > 0, 'aucun appel de script trouvé');
   for (const m of references) {
-    assert.match(
-      m[0],
-      /^"?\$(GITHUB_ACTION_PATH|\{GITHUB_ACTION_PATH\})\/scripts\//,
-      `« ${m[0]} » n'est pas préfixé par $GITHUB_ACTION_PATH`,
-    );
+    assert.match(m[0], /^"?\$(GITHUB_ACTION_PATH|\{GITHUB_ACTION_PATH\})\/scripts\//, `« ${m[0]} »`);
   }
 });
 
-test('les versions épinglées sont celles de la table du contrat', () => {
-  const uses = STEPS.map((step) => step.cles.get('uses')).filter(Boolean);
-  // `setup-python@v5` déclare `using: node20`, retiré des runners le 2026-09-16 :
-  // épingler v5 livrerait une action qui meurt à cette date.
-  assert.deepEqual(uses, ['actions/setup-python@v6']);
-  const setupPython = STEPS.find((step) => step.cles.get('uses') === 'actions/setup-python@v6');
-  assert.equal(setupPython.avec.get('python-version'), '${{ inputs.python-version }}');
+// ═════════════════════════════════════════════════════════════════════════════
+// 12 — les deux passages du modèle
+// ═════════════════════════════════════════════════════════════════════════════
 
-  // L'installation épingle la version par l'input, jamais un « latest » mouvant ni
-  // un numéro en dur qui divergerait du défaut de l'input.
-  const install = STEPS.map((step) => step.cles.get('run') || '').find((run) =>
-    run.includes('aider-chat'),
-  );
-  assert.ok(install, 'aucun step n’installe aider-chat');
-  assert.match(install, /aider-chat==\$\{\{\s*inputs\.aider-version\s*\}\}/);
+const CLAUDE_CODE_ACTION = 'anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9';
+
+test('claude-code-action est épinglée par le SHA du contrat, et seule action appelée', () => {
+  const uses = STEPS.map((s) => s.cles.get('uses')).filter(Boolean);
+  assert.deepEqual(uses, [CLAUDE_CODE_ACTION, CLAUDE_CODE_ACTION]);
 });
+
+test('les deux passages sont réglés à l’identique, sans Bash, et .git interdit', () => {
+  // Le cœur de la sécurité de la voie A : claude-code-action met le jeton GitHub dans
+  // l'environnement de Claude Code, donc tout code qu'il exécuterait pourrait le lire.
+  // Voir « Pourquoi Claude Code n'a pas Bash » dans plan/contrat.md.
+  const [premier, second] = ['claude1', 'claude2'].map(stepParId);
+  for (const cle of ['anthropic_api_key', 'github_token', 'settings', 'claude_args']) {
+    assert.equal(second.avec.get(cle), premier.avec.get(cle), `« ${cle} » diffère entre les deux passages`);
+  }
+  assert.equal(premier.avec.get('prompt'), '${{ steps.preparer.outputs.consigne }}');
+  assert.equal(second.avec.get('prompt'), '${{ steps.verifier1.outputs.consigne-reprise }}');
+  assert.equal(premier.avec.get('anthropic_api_key'), '${{ steps.proxy.outputs.jeton }}');
+
+  const args = premier.avec.get('claude_args').split('\n').join(' ');
+  const autorises = args.match(/--allowedTools "([^"]*)"/);
+  const interdits = args.match(/--disallowedTools "([^"]*)"/);
+  assert.ok(autorises && interdits, 'claude_args doit porter --allowedTools et --disallowedTools entre guillemets');
+  // Des VIRGULES : mesuré au lot C, une liste séparée par des espaces arrive comme
+  // une seule entrée et n'est pas appliquée.
+  assert.deepEqual(autorises[1].split(','), ['Read', 'Edit', 'Write', 'Glob', 'Grep']);
+  assert.ok(interdits[1].split(',').includes('Bash'), 'Bash doit être dans --disallowedTools');
+
+  const reglages = JSON.parse(premier.avec.get('settings').replace(/\$\{\{[^}]*\}\}/g, 'x'));
+  for (const regle of ['Read(./.git/**)', 'Edit(./.git/**)', 'Write(./.git/**)']) {
+    assert.ok(reglages.permissions.deny.includes(regle), `settings.permissions.deny doit porter ${regle}`);
+  }
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 13 — secrets et scripts
+// ═════════════════════════════════════════════════════════════════════════════
 
 test('aucun secret n’est interpolé dans un run:', () => {
-  // Un secret interpolé dans un `run:` est écrit dans le script généré, donc
-  // exposé à `set -x`, aux traces d'erreur du shell et à tout `ps`. Les secrets
+  // Un secret interpolé dans un `run:` est écrit dans le script généré. Les secrets
   // passent par `env:`, où le runner les masque.
-  const SECRETS = ['inputs.deepseek-api-key', 'inputs.github-token'];
   for (const [index, step] of STEPS.entries()) {
     const run = step.cles.get('run') || '';
-    for (const secret of SECRETS) {
-      assert.equal(
-        run.includes(secret),
-        false,
-        `le step « ${nomDuStep(step, index)} » interpole « ${secret} » dans son run:`,
-      );
+    for (const secret of ['inputs.scaleway-api-key', 'inputs.github-token']) {
+      assert.equal(run.includes(secret), false, `le step « ${nomDuStep(step, index)} » interpole « ${secret} »`);
     }
   }
-  // `secrets.*` n'est de toute façon pas résolu dans un `action.yml` : l'écrire
-  // donnerait une chaîne vide silencieuse.
+  // `secrets.*` n'est pas résolu dans un `action.yml` : chaîne vide silencieuse.
   assert.equal(/secrets\./.test(TEXTE), false);
 });
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 13 — les scripts appelés existent
-// ═════════════════════════════════════════════════════════════════════════════
-
 test('les scripts référencés par les steps existent sur le disque', () => {
-  // Un action.yml qui appelle un fichier absent est vert à la lecture et rouge à
-  // l'exécution, après l'installation d'aider — plus d'une minute de runner pour
-  // apprendre qu'un fichier manque.
   const scripts = STEPS.map(scriptDuStep).filter((s) => s !== '');
   assert.ok(scripts.length > 0, 'aucun script référencé');
   for (const script of scripts) {
-    const chemin = path.join(RACINE, script);
-    assert.ok(fs.existsSync(chemin), `${script} est appelé par action.yml mais n'existe pas`);
+    assert.ok(fs.existsSync(path.join(RACINE, script)), `${script} est appelé par action.yml mais n'existe pas`);
   }
 });

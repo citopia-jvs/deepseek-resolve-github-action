@@ -1,22 +1,33 @@
 name: "DeepSeek Auto-Resolve Issue"
-description: "Utilise DeepSeek pour résoudre automatiquement les issues mentionnant @dseek"
+description: "Résout une issue mentionnant @ag-resolve avec Claude Code, branché sur un modèle Scaleway"
 author: "Fabien Sanchez"
 
 inputs:
-  deepseek-api-key:
-    description: "Clé API DeepSeek. À passer par un secret, jamais en clair."
+  scaleway-api-key:
+    description: "Clé d'API Scaleway Generative APIs. À passer par un secret, jamais en clair."
     required: true
+  scaleway-base-url:
+    description: "URL de l'API Scaleway compatible OpenAI, de la forme https://api.scaleway.ai/<id-projet>/v1."
+    required: false
+    default: "https://api.scaleway.ai/v1"
+  model:
+    description: "Modèle Scaleway utilisé pour toutes les requêtes."
+    required: false
+    default: "glm-5.3"
+  context-window:
+    # Claude Code ne connaît pas la fenêtre d'un modèle non-Claude et suppose
+    # 200 000 tokens : sans cette valeur, il compacterait au mauvais moment.
+    description: "Fenêtre de contexte du modèle, en tokens."
+    required: false
+    default: "256000"
+  max-turns:
+    description: "Nombre maximum de tours de Claude Code par passage."
+    required: false
+    default: "30"
   github-token:
-    # Pas de `required: true` : exiger une valeur tout en fournissant un défaut est
-    # contradictoire, et GitHub n'applique de toute façon pas `required` sur les
-    # inputs d'action.
-    description: "Jeton GitHub utilisé pour lire l'issue, pousser la branche et publier la PR."
+    description: "Jeton GitHub utilisé pour pousser la branche, ouvrir la PR et commenter."
     required: false
     default: ${{ github.token }}
-  max-iterations:
-    description: "Nombre maximum de tours : un appel à aider, puis la commande de validation."
-    required: false
-    default: "2"
   validation-command:
     description: "Commande exécutée dans le dépôt appelant pour valider la correction."
     required: false
@@ -25,30 +36,6 @@ inputs:
     description: "Branche de base de la pull request. Vide : la branche du checkout."
     required: false
     default: ""
-  model:
-    # `deepseek-chat` et `deepseek-reasoner` sont inaccessibles depuis le
-    # 2026-07-24 15:59 UTC : seuls `deepseek-v4-pro` et `deepseek-v4-flash`
-    # répondent encore. Heure relevée à la source au lot 6.
-    description: "Modèle passé à aider, au format LiteLLM."
-    required: false
-    default: "deepseek/deepseek-v4-pro"
-  aider-version:
-    # Version en dur et non « latest » : une action publiée ne doit pas installer
-    # une version mouvante. Monter cette valeur oblige à revérifier
-    # `aider-models.json` (R5), et installe 107 paquets tiers dans le runner.
-    description: "Version d'aider-chat installée par l'action."
-    required: false
-    default: "0.86.2"
-  python-version:
-    # `aider-chat 0.86.2` déclare requires_python = "<3.13,>=3.10" : sans épinglage,
-    # l'installation casserait le jour où l'image du runner passe à Python 3.14.
-    description: "Version de Python utilisée pour installer aider."
-    required: false
-    default: "3.12"
-  map-tokens:
-    description: "Budget de tokens de la carte du dépôt construite par aider."
-    required: false
-    default: "2048"
   allowed-associations:
     description: "Associations au dépôt autorisées à déclencher l'action, séparées par des virgules."
     required: false
@@ -57,17 +44,7 @@ inputs:
     description: "Exiger que l'auteur de l'issue soit lui aussi de confiance pour prendre son corps comme consigne."
     required: false
     default: "true"
-  no-publish:
-    description: "Tout exécuter sans rien pousser ni publier : branche locale, aucune PR, aucun commentaire."
-    required: false
-    default: "false"
-  aider-call-timeout-minutes:
-    description: "Durée maximale d'un seul appel à aider, en minutes."
-    required: false
-    default: "15"
 
-# Sans ces sorties, un consommateur ne peut rien enchaîner — étiqueter la PR,
-# notifier, mesurer — et le smoke test n'a rien à contrôler.
 outputs:
   poursuivre:
     description: "« true » si la garde a autorisé l'exécution, « false » sinon."
@@ -76,27 +53,18 @@ outputs:
     description: "Nom de la branche de travail, de la forme fix-issue-<n>."
     value: ${{ steps.garde.outputs.branche }}
   numero-pr:
-    description: "Numéro de la pull request ouverte, vide si aucune ne l'a été."
-    value: ${{ steps.resoudre.outputs.numero-pr }}
-  iterations:
-    description: "Nombre de tours de validation effectués."
-    value: ${{ steps.resoudre.outputs.iterations }}
+    description: "Numéro de la pull request, vide si aucune n'a été ouverte."
+    value: ${{ steps.preparer.outputs.numero-pr }}
   succes:
-    description: "« true » uniquement si la commande de validation est passée."
-    value: ${{ steps.resoudre.outputs.succes }}
+    description: "« true » uniquement si la validation est passée et le travail poussé."
+    value: ${{ steps.conclure.outputs.succes }}
 
 runs:
   using: composite
   steps:
-    # Les inputs d'une composite action ne sont PAS exposés en `INPUT_*` aux
-    # sous-processus, contrairement à une JS action : chaque valeur lue par un
-    # script doit figurer dans le `env:` de son step. Les noms sont ceux de
-    # `plan/contrat.md`.
-    #
-    # Les scripts sont appelés via `$GITHUB_ACTION_PATH` et jamais par un chemin
-    # relatif : en `uses: ./` cette variable vaut `GITHUB_WORKSPACE`, donc un
-    # chemin relatif passerait le smoke test local et casserait chez tout
-    # consommateur, où l'action est déployée sous `_actions/<owner>/<repo>/<ref>`.
+    # Les inputs d'une composite action ne sont PAS exposés en `INPUT_*` : toute
+    # valeur lue par un script figure dans le `env:` de son step. Les scripts sont
+    # appelés via `$GITHUB_ACTION_PATH`, jamais par un chemin relatif.
     - id: garde
       shell: bash
       env:
@@ -105,72 +73,154 @@ runs:
         EXIGER_AUTEUR_ISSUE_DE_CONFIANCE: ${{ inputs.require-trusted-issue-author }}
       run: node "$GITHUB_ACTION_PATH/scripts/garde.js"
 
-    # La garde tourne avant Python et aider : l'installation prend plus d'une
-    # minute, et l'immense majorité des déclenchements sont des commentaires
-    # d'issue anodins que la garde refuse.
-    - if: steps.garde.outputs.poursuivre == 'true'
-      uses: actions/setup-python@v6
-      with:
-        python-version: ${{ inputs.python-version }}
-
-    - if: steps.garde.outputs.poursuivre == 'true'
-      shell: bash
-      # `pipx install "aider-chat==<version>"` épingle en réalité tout l'arbre :
-      # aider déclare ses dépendances en `==`. On s'en tient donc à pipx plutôt
-      # qu'à un verrou hashé, dont les 108 lignes seraient à régénérer à chaque
-      # montée de version sans qu'aucun hash ne soit exigé.
-      run: |
-        # Les images Ubuntu embarquent déjà pipx ; ce contrôle sert aux runners
-        # auto-hébergés, macOS ou Windows, où l'erreur serait sinon opaque.
-        command -v pipx >/dev/null || {
-          echo "::error::pipx introuvable. Cette action requiert un runner ubuntu-24.04."
-          exit 1
-        }
-        pipx install --python "$(which python)" "aider-chat==${{ inputs.aider-version }}"
-
-    - id: resoudre
+    # Branche, commit vide, PR brouillon, consigne. Avant claude-code-action, qui
+    # ne fait rien de tout ça en mode agent.
+    - id: preparer
       if: steps.garde.outputs.poursuivre == 'true'
       shell: bash
       env:
-        DEEPSEEK_API_KEY: ${{ inputs.deepseek-api-key }}
         GH_TOKEN: ${{ inputs.github-token }}
         NUMERO_ISSUE: ${{ steps.garde.outputs.issue }}
         BRANCHE: ${{ steps.garde.outputs.branche }}
-        MODELE: ${{ inputs.model }}
-        MAX_ITERATIONS: ${{ inputs.max-iterations }}
-        COMMANDE_VALIDATION: ${{ inputs.validation-command }}
         BRANCHE_BASE: ${{ inputs.base-branch }}
-        MAP_TOKENS: ${{ inputs.map-tokens }}
-        SANS_PUBLICATION: ${{ inputs.no-publish }}
-        MINUTES_MAX_APPEL_AIDER: ${{ inputs.aider-call-timeout-minutes }}
-        # Sans cette ligne, `resolve.js` lit une chaîne vide, conclut « auteur de
-        # confiance » et reprend le corps de l'issue comme consigne alors que la
-        # garde venait de juger son auteur non autorisé (R6). Aucune erreur ne le
-        # signalerait.
+        COMMANDE_VALIDATION: ${{ inputs.validation-command }}
         CONSIGNE_RESTREINTE: ${{ steps.garde.outputs.consigne-restreinte }}
-      run: node "$GITHUB_ACTION_PATH/scripts/resolve.js"
+      run: node "$GITHUB_ACTION_PATH/scripts/preparer.js"
 
-    # Une composite action n'a pas de `post:` : le schéma ne connaît que
-    # `{using, steps}`. Sans ce step en `always()`, un `resolve.js` qui plante, un
-    # `timeout-minutes` du consommateur ou un job annulé ne laisseraient que la
-    # réaction sur l'issue, sans aucun message expliquant l'arrêt (R12).
-    #
-    # Pas de `STATUT_JOB: ${{ job.status }}` ici, et surtout ne pas le remettre :
-    # mesuré sur le run 32380365244, cette expression vaut « success » dans un step
-    # qui suit un step de la MÊME composite terminé en `conclusion=failure`. Le
-    # script s'en servait comme critère de silence et se taisait donc dans le seul
-    # scénario où il sert (issue #3). Son critère est maintenant le marqueur de
-    # compte rendu, qu'il écrit et relit lui-même. Procès-verbal de la mesure dans
-    # `plan/contrat.md`, section « Ce que vaut `${{ job.status }}` dans une
-    # composite action ».
-    - if: always() && steps.garde.outputs.poursuivre == 'true'
+    # Proxy Anthropic → OpenAI vers Scaleway, en tâche de fond pour le reste du
+    # job. La clé passe par un fichier supprimé dès le démarrage, et `env -u` la
+    # retire de l'environnement du proxy, lisible dans /proc par tout processus
+    # du même utilisateur.
+    - id: proxy
+      if: steps.preparer.outcome == 'success'
+      shell: bash
+      env:
+        SCW_SECRET_KEY: ${{ inputs.scaleway-api-key }}
+        SCW_MODELE: ${{ inputs.model }}
+        SCW_BASE_URL: ${{ inputs.scaleway-base-url }}
+      run: |
+        cle="$(mktemp)"
+        chmod 600 "$cle"
+        printf '%s' "$SCW_SECRET_KEY" > "$cle"
+        jeton="$(node -e 'process.stdout.write(require("crypto").randomBytes(24).toString("hex"))')"
+        echo "::add-mask::$jeton"
+        SCW_CLE_FICHIER="$cle" PROXY_JETON="$jeton" PROXY_PORT=0 \
+          nohup env -u SCW_SECRET_KEY node "$GITHUB_ACTION_PATH/scripts/proxy.js" \
+          > "$RUNNER_TEMP/dsr-proxy.port" 2> "$RUNNER_TEMP/dsr-proxy.log" &
+        port=''
+        for _ in $(seq 1 50); do
+          port="$(sed -n 's/^PORT=//p' "$RUNNER_TEMP/dsr-proxy.port")"
+          if [ -n "$port" ]; then break; fi
+          sleep 0.2
+        done
+        rm -f "$cle"
+        if [ -z "$port" ]; then
+          echo "::error::Le proxy n'a pas démarré."
+          cat "$RUNNER_TEMP/dsr-proxy.log"
+          exit 1
+        fi
+        echo "ANTHROPIC_BASE_URL=http://127.0.0.1:$port" >> "$GITHUB_ENV"
+        echo "jeton=$jeton" >> "$GITHUB_OUTPUT"
+
+    # Claude Code n'a PAS Bash : claude-code-action lui transmet le jeton GitHub
+    # dans son environnement, et tout code qu'il exécuterait — un test qu'il vient
+    # d'écrire — pourrait le lire. Il lit et édite ; les tests sont lancés par
+    # `verifier.js`, sans le jeton.
+    - id: claude1
+      if: steps.proxy.outcome == 'success'
+      # v1.0.258, épinglée par SHA : voir « Versions épinglées » dans plan/contrat.md.
+      uses: anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9
+      with:
+        prompt: ${{ steps.preparer.outputs.consigne }}
+        anthropic_api_key: ${{ steps.proxy.outputs.jeton }}
+        github_token: ${{ inputs.github-token }}
+        settings: |
+          {
+            "env": {
+              "ANTHROPIC_MODEL": "${{ inputs.model }}",
+              "ANTHROPIC_DEFAULT_OPUS_MODEL": "${{ inputs.model }}",
+              "ANTHROPIC_DEFAULT_SONNET_MODEL": "${{ inputs.model }}",
+              "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${{ inputs.model }}",
+              "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "${{ inputs.context-window }}",
+              "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
+              "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+            },
+            "permissions": {
+              "deny": ["Read(./.git/**)", "Edit(./.git/**)", "Write(./.git/**)"]
+            }
+          }
+        claude_args: >-
+          --model ${{ inputs.model }}
+          --max-turns ${{ inputs.max-turns }}
+          --allowedTools "Read,Edit,Write,Glob,Grep"
+          --disallowedTools "Bash,WebFetch,WebSearch"
+
+    - id: verifier1
+      if: always() && steps.claude1.outcome != 'skipped'
+      shell: bash
+      env:
+        COMMANDE_VALIDATION: ${{ inputs.validation-command }}
+        SAUVEGARDE_CONFIG: ${{ steps.preparer.outputs.sauvegarde-config }}
+        CONSIGNE: ${{ steps.preparer.outputs.consigne }}
+        PASSAGE: "1"
+      run: node "$GITHUB_ACTION_PATH/scripts/verifier.js"
+
+    # Seconde chance : les tests ont échoué, le modèle reçoit leur sortie.
+    - id: claude2
+      if: always() && steps.verifier1.outputs.succes == 'false'
+      # v1.0.258, épinglée par SHA : voir « Versions épinglées » dans plan/contrat.md.
+      uses: anthropics/claude-code-action@6b6870e649b5ff408753befeaee5fc7989d4e6a9
+      with:
+        prompt: ${{ steps.verifier1.outputs.consigne-reprise }}
+        anthropic_api_key: ${{ steps.proxy.outputs.jeton }}
+        github_token: ${{ inputs.github-token }}
+        settings: |
+          {
+            "env": {
+              "ANTHROPIC_MODEL": "${{ inputs.model }}",
+              "ANTHROPIC_DEFAULT_OPUS_MODEL": "${{ inputs.model }}",
+              "ANTHROPIC_DEFAULT_SONNET_MODEL": "${{ inputs.model }}",
+              "ANTHROPIC_DEFAULT_HAIKU_MODEL": "${{ inputs.model }}",
+              "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "${{ inputs.context-window }}",
+              "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
+              "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
+            },
+            "permissions": {
+              "deny": ["Read(./.git/**)", "Edit(./.git/**)", "Write(./.git/**)"]
+            }
+          }
+        claude_args: >-
+          --model ${{ inputs.model }}
+          --max-turns ${{ inputs.max-turns }}
+          --allowedTools "Read,Edit,Write,Glob,Grep"
+          --disallowedTools "Bash,WebFetch,WebSearch"
+
+    - id: verifier2
+      if: always() && steps.claude2.outcome != 'skipped'
+      shell: bash
+      env:
+        COMMANDE_VALIDATION: ${{ inputs.validation-command }}
+        SAUVEGARDE_CONFIG: ${{ steps.preparer.outputs.sauvegarde-config }}
+        CONSIGNE: ${{ steps.preparer.outputs.consigne }}
+        PASSAGE: "2"
+      run: node "$GITHUB_ACTION_PATH/scripts/verifier.js"
+
+    - id: conclure
+      if: always() && steps.preparer.outputs.numero-pr != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
         NUMERO_ISSUE: ${{ steps.garde.outputs.issue }}
+        NUMERO_PR: ${{ steps.preparer.outputs.numero-pr }}
         BRANCHE: ${{ steps.garde.outputs.branche }}
-        SANS_PUBLICATION: ${{ inputs.no-publish }}
-      run: node "$GITHUB_ACTION_PATH/scripts/rendre-compte.js"
+        SAUVEGARDE_CONFIG: ${{ steps.preparer.outputs.sauvegarde-config }}
+        SUCCES: ${{ steps.claude2.outcome != 'skipped' && steps.verifier2.outputs.succes || steps.verifier1.outputs.succes }}
+        PASSAGES: ${{ steps.claude2.outcome != 'skipped' && '2' || '1' }}
+        ISSUE_CLAUDE: ${{ steps.claude2.outcome != 'skipped' && steps.claude2.outcome || steps.claude1.outcome }}
+        EXTRAIT: ${{ steps.claude2.outcome != 'skipped' && steps.verifier2.outputs.extrait || steps.verifier1.outputs.extrait }}
+        FICHIER_EXECUTION: ${{ steps.claude2.outcome != 'skipped' && steps.claude2.outputs.execution_file || steps.claude1.outputs.execution_file }}
+        RELECTEUR: ${{ github.actor }}
+      run: node "$GITHUB_ACTION_PATH/scripts/conclure.js"
 
 branding:
   icon: "cpu"

@@ -1,5 +1,10 @@
 # Plan : composite action pilotant aider
 
+> **Historique.** Ce plan et ses fichiers `lot-*.md` décrivent la v1, qui pilotait
+> aider avec DeepSeek. Ils sont gardés pour leurs mesures. L’action actuelle entoure
+> claude-code-action : voir [`contrat.md`](contrat.md), qui fait foi, et
+> [`essai-claude-code.md`](essai-claude-code.md) pour les mesures de la refonte.
+
 Document maître. Lire [`contrat.md`](contrat.md) juste après, avant tout lot : il
 tient les noms et les versions. Chaque lot est détaillé dans son propre fichier et
 rédigé pour être exécutable par un agent qui n'a pas suivi la discussion.
