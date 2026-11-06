@@ -63,6 +63,18 @@ D'où : `--allowedTools "Read,Edit,Write,Glob,Grep"`, `--disallowedTools
 ne voit ni `GH_TOKEN`, ni `GITHUB_TOKEN`, ni `INPUT_GITHUB_TOKEN`, ni jeton dans
 `.git/config`.
 
+Les **hooks du dépôt consommateur** posent le même problème : Claude Code charge
+`.claude/settings.json` du répertoire de travail et lance ses hooks avec le jeton dans
+leur environnement, et un hook peut appeler un fichier que le modèle vient d'écrire
+(un script du dépôt, un binaire de `node_modules`). D'où `"disableAllHooks": true`
+dans `settings`, et `deny` en `Edit`/`Write` sur `./.claude/**` et `./.mcp.json`.
+Mesuré en local (Claude Code 2.1.311, `glm-5.3`, réglages écrits au niveau
+utilisateur comme le fait l'action) : sans `disableAllHooks`, les hooks `SessionStart`
+et `PostToolUse` du dépôt tournent, `GITHUB_TOKEN` présent ; avec, aucun ne tourne.
+Entre deux passages, `verifier.js` remet `.claude/`, `.mcp.json`, `CLAUDE.md` et
+`CLAUDE.local.md` à l'état du commit : un test pourrait y déposer des hooks, un `env`
+ou un `apiKeyHelper` que le second passage chargerait.
+
 **Risque résiduel, non fermé :** les tests exécutent du code du modèle sous le même
 utilisateur que les steps suivants. Un processus laissé en tâche de fond par un test
 pourrait lire `/proc/<pid>/environ` du step `conclure`, qui porte le jeton, ou réécrire
@@ -124,7 +136,9 @@ configuration git : `persist-credentials: false` est exigé.
 **Pas de `GH_TOKEN`**, à dessein. Sorties : `succes` (`'true'` \| `'false'`),
 `consigne-reprise` (consigne + extrait de la sortie des tests, vide si succès),
 `extrait` (fin de la sortie, nettoyée et courte, publiée dans le commentaire de
-conclusion). Sort en 0 quand les tests ont pu tourner, verts ou rouges.
+conclusion). Sort en 0 quand les tests ont pu tourner, verts ou rouges. Après les
+tests, remet `.claude/`, `.mcp.json`, `CLAUDE.md` et `CLAUDE.local.md` à l'état
+du commit, fichiers ignorés compris.
 
 ### `conclure.js`
 
