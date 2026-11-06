@@ -4,23 +4,22 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Ce qu'est ce dépôt
 
-Composite action GitHub qui pilote [aider](https://aider.chat) avec un modèle DeepSeek
-pour tenter de résoudre automatiquement une issue. Déclencheur : `@dseek` dans une
-issue ou un commentaire d'issue, écrit par quelqu'un d'autorisé. L'action crée une
-branche `fix-issue-<n>`, appelle aider, commite elle-même ce qu'elle a validé, pousse,
-ouvre une pull request, puis boucle validation / correction jusqu'à ce que la commande
-de validation passe ou que `max-iterations` soit atteint.
+Composite action GitHub qui tente de résoudre une issue avec Claude Code, branché sur
+un modèle Scaleway. Déclencheur : `@dseek` dans une issue ou un commentaire d'issue,
+écrit par quelqu'un qui a le droit d'écriture. L'action prend l'issue en charge, crée
+la branche `fix-issue-<n>`, ouvre une PR brouillon sur un commit vide, fait passer
+Claude Code, lance elle-même les tests, donne **une** seconde chance au modèle en cas
+d'échec, puis passe la PR en prête et demande la revue — ou la laisse en brouillon.
 
-**Cette action n'implémente pas de boucle d'agent.** Elle n'appelle jamais directement
-un modèle pour éditer du code : c'est aider qui lit le dépôt, choisit son contexte et
-écrit les fichiers. Le rôle du dépôt est l'orchestration autour d'aider — déclenchement,
-autorisation, garde-fous de configuration, exécution de la validation, publication. Un
-agent qui viendrait ici pour « compléter » une couche modèle manquante se trompe de
-problème : cette couche n'a pas à exister.
+**Ce dépôt n'implémente pas de boucle d'agent.** Le modèle est exécuté par
+[`anthropics/claude-code-action`](https://github.com/anthropics/claude-code-action),
+en mode agent, épinglée par SHA. Le dépôt fournit ce qui l'entoure : garde,
+préparation, proxy Anthropic → OpenAI vers Scaleway (`scripts/proxy.js`),
+vérification, conclusion. Jusqu'à `v1`, le moteur était aider + DeepSeek ; le nom du
+dépôt en vient. Le pourquoi de la refonte et ses mesures : `plan/essai-claude-code.md`.
 
-`README.md` documente l'usage côté consommateur (inputs, sorties, sécurité,
-tarification). Ce fichier documente ce qu'un agent qui édite ce dépôt ne peut pas
-déduire du code seul.
+`README.md` documente l'usage côté consommateur. Ce fichier documente ce qu'un agent
+qui édite ce dépôt ne peut pas déduire du code seul.
 
 ## Commandes
 
@@ -47,75 +46,57 @@ utilise cette même forme, et `test/ci.test.js` l'y épingle jeton par jeton —
 **rien ne lit ce fichier-ci** : aucun test ne contrôle que les deux restent d'accord.
 Éditer le tube du workflow oblige donc à revenir corriger ce bloc à la main.
 
-Les suites sont celles de « Suites de test du dépôt » dans `plan/contrat.md` :
-`chemins`, `texte`, `garde`, `boucle`, `action`, `compte-rendu`, `ci`, plus
-`traduction` et `proxy` pour le proxy Scaleway. Les lancer par le glob `test/*.test.js`, jamais par une liste de
-noms écrite à la main — une suite ajoutée doit être exercée sans que personne y pense,
-et une liste recopiée ici serait périmée au lot suivant. Ne pas maintenir de compte
-— de cas de test, de steps, d'inputs, d'outputs ou de jobs — nulle part dans ce
-fichier : ce sont des détails qui changent à chaque lot, et un chiffre figé ici finit
-par mentir sans que rien ne le signale.
+Les suites sont celles de « Suites de test du dépôt » dans `plan/contrat.md`. Les
+lancer par le glob `test/*.test.js`, jamais par une liste de noms écrite à la main —
+une suite ajoutée doit être exercée sans que personne y pense. Ne pas maintenir de
+compte — de cas de test, de steps, d'inputs, d'outputs ou de jobs — nulle part dans ce
+fichier : un chiffre figé ici finit par mentir sans que rien ne le signale.
 
 `validation-command` (défaut `npm test`) s'applique au dépôt **consommateur** de
 l'action, jamais à celui-ci : il n'y a pas de `npm test` ici, et ce n'est pas un oubli.
 
-Pour exercer `garde.js`, `resolve.js` ou `rendre-compte.js` isolément hors des suites,
-remplacer `gh` et `aider` par les stubs versionnés via `GH_CLI` et `AIDER_CLI` — jamais
-`GH_CLI=/bin/true` : `__fixtures__/gh-stub.sh` répond `[]` sur `gh pr list --json
-number`, alors qu'un binaire muet laisserait `JSON.parse('')` lever dans le script.
-Les tests le font déjà ; regarder l'en-tête de `__fixtures__/gh-stub.sh` et de
-`__fixtures__/aider-stub.sh` pour le format des variables de scénario.
+Pour exercer un script isolément hors des suites, remplacer `gh` par le stub versionné
+via `GH_CLI` — jamais `GH_CLI=/bin/true` (voir « Pièges »). `test/etapes.test.js`
+montre comment monter un dépôt jetable avec un `origin` local.
+
+Rien de ce qui touche à claude-code-action ou au modèle ne se teste hors ligne. Pour le
+mesurer, il faut un runner : le dépôt d'essai privé `citopia-jvs/dsr-bac-a-sable` a
+servi à toutes les mesures de `plan/essai-claude-code.md`.
 
 ## Architecture
 
 ```
-action.yml                # using: composite — steps, inputs, outputs (voir action.yml)
-aider.conf.yml            # config d'aider, maîtrisée par l'action, hors d'atteinte du modèle
-aider-models.json         # métadonnées des modèles DeepSeek, absents de litellm
-scripts/garde.js          # événement, autorisation, anti-rejeu — tourne avant l'install d'aider
-scripts/resolve.js        # préparation de la branche, primitives, orchestration de la boucle
-scripts/rendre-compte.js  # step if: always() — compte rendu, y compris quand resolve.js est mort
-scripts/proxy.js          # proxy local Anthropic → OpenAI (Claude Code + Scaleway), pas encore branché
-scripts/lib/              # gh.js, git.js, chemins.js, texte.js, traduction.js — stdlib seule
-__fixtures__/             # payloads d'événements + stubs gh et aider
+action.yml                # using: composite — le déroulé est dans plan/contrat.md
+scripts/garde.js          # événement, autorisation, anti-rejeu
+scripts/preparer.js       # branche, commit vide, PR brouillon, consigne, sauvegarde de .git/config
+scripts/proxy.js          # proxy local Anthropic → OpenAI, lancé en tâche de fond par action.yml
+scripts/verifier.js       # commande de validation, SANS le jeton GitHub
+scripts/conclure.js       # commit sur liste blanche, push, PR prête + revue, ou brouillon
+scripts/lib/              # gh, git, chemins, texte, traduction, action — stdlib seule
+__fixtures__/             # payloads d'événements + stub gh
 test/                     # les suites, lancées par le glob test/*.test.js
 .github/workflows/test.yml # la CI du dépôt : plusieurs jobs, hors ligne
-plan/                     # le plan de refonte, dont contrat.md — source des noms
+plan/                     # contrat.md — source des noms — et mesures des essais
 ```
-
-Les cinq steps de `action.yml`, dans l'ordre : garde, `actions/setup-python`,
-installation d'aider par `pipx`, résolution (`resolve.js`), compte rendu en
-`if: always() && …poursuivre == 'true'`.
 
 Contraintes à connaître avant de toucher au code, parce qu'elles ne se lisent pas
 dans un seul fichier :
 
 - **Bibliothèque standard Node seule, CommonJS.** Aucune dépendance npm : pas de
-  `package.json`, pas de `node_modules`, pas de bundling, pas de `dist/`. Ajouter une
-  dépendance réintroduirait tout le problème de packaging qu'une composite action sans
-  build supprime. C'est un invariant à préserver, pas un oubli à corriger.
+  `package.json`, pas de `node_modules`, pas de bundling, pas de `dist/`. C'est un
+  invariant à préserver, pas un oubli à corriger.
 - **Les inputs d'une composite action ne sont pas exposés en `INPUT_*`** aux
-  sous-processus, contrairement à une action JS. Toute valeur qu'un script doit lire
-  figure dans le `env:` de son step, dans `action.yml`. Une faute de frappe dans
-  `${{ inputs.* }}` s'évalue en chaîne vide **sans erreur** : c'est l'oubli le plus
-  probable à l'ajout d'un input, et c'est pour ça que `test/action.test.js` existe —
-  il contrôle la cohérence `inputs:` ↔ `${{ inputs.* }}`, et le job `suites` de la CI
-  le lance.
+  sous-processus. Toute valeur qu'un script doit lire figure dans le `env:` de son
+  step. Une faute de frappe dans `${{ inputs.* }}` s'évalue en chaîne vide **sans
+  erreur** : c'est pour ça que `test/action.test.js` contrôle la cohérence
+  `inputs:` ↔ `${{ inputs.* }}` et le bloc `env:` exact de chaque step.
 - **`$GITHUB_ACTION_PATH`, jamais un chemin relatif**, pour atteindre `scripts/*.js`.
-  En `uses: ./`, cette variable vaut `GITHUB_WORKSPACE` (`ActionManager.cs:699-705` du
-  runner) : un chemin relatif y passerait sans se faire remarquer. Chez un consommateur,
-  l'action est déployée sous `_actions/<owner>/<repo>/<ref>`, où le même chemin relatif
-  casse. C'est le job `smoke-sous-repertoire` de la CI qui attrape cette régression —
-  pas `smoke-local`, où `GITHUB_ACTION_PATH` vaut justement le workspace et masquerait
-  le défaut.
-- **La garde tourne avant l'installation d'aider**, volontairement : `pipx install`
-  amène 107 paquets tiers et prend plus d'une minute, pour un déclencheur qui, dans
-  l'immense majorité des cas, sera refusé par la garde.
+  En `uses: ./`, cette variable vaut `GITHUB_WORKSPACE` : un chemin relatif y
+  passerait sans se faire remarquer, et casserait chez un consommateur. C'est le job
+  `smoke-sous-repertoire` de la CI qui attrape cette régression.
 - **Une composite action n'a ni `timeout-minutes`, ni `concurrency`, ni `pre:`/`post:`.**
-  Le schéma d'une composite ne connaît que `{using, steps}`. D'où le step
-  `if: always() && …poursuivre == 'true'` pour le compte rendu de secours, et le renvoi au workflow consommateur
-  pour `timeout-minutes` et `concurrency` — cette action ne peut pas les porter
-  elle-même.
+  Ces garde-fous sont renvoyés au workflow consommateur. Les steps qui doivent tourner
+  après un échec portent `always()` et lisent `steps.<id>.outcome`.
 
 ### `plan/contrat.md` est la source de vérité des noms
 
@@ -166,124 +147,59 @@ peut fermer une mutation qui change la **sémantique** du shell sans changer son
 
 ### Ce que vaut `${{ job.status }}` dans une composite
 
-Elle n'est jamais vide : `StepsRunner.cs:53` la pose **avant** le premier step. Cette
-moitié tient, confirmée à l'exécution.
+**L'action ne consomme pas cette expression, et ne doit pas la consommer.** Mesuré sur
+le run `32380365244`, du temps de l'ancienne action : un step qui suit un step de la
+**même** composite terminé en `failure` reçoit `job.status == 'success'`. Les
+conditions des steps lisent donc `steps.<id>.outcome` — mesuré lisible au step
+suivant, run `42223323921`. Procès-verbal complet dans `plan/contrat.md`.
 
-L'autre moitié — « elle n'est pas remise à `success` dans les steps d'une composite » —
-était **fausse**, et ça s'est vu en run réel. Mesuré sur le run `32380365244`
-(image `ubuntu-24.04`) : le step `resoudre` se termine en `conclusion=failure`, et le
-step suivant de la **même** composite démarre en recevant `success`. Le compte rendu
-de secours en a conclu — à tort — qu'un compte rendu avait déjà été publié par la
-boucle, et il n'a rien publié, dans le seul scénario où ce step existe. C'est l'issue
-#3 : job rouge, aucun compte rendu.
-
-La lecture d'`ExecutionContext.cs:136-138` et de `CompositeActionHandler.cs:144-158`
-qui a produit l'affirmation fausse n'était pas absurde en soi : un step embarqué reçoit
-bien l'objet `JobContext` du job appelant, ces deux fichiers ne remplaçant que
-`inputs`, `steps`, `github` et `env`. Mais partager l'objet n'autorisait pas à en
-**déduire** que sa clé `status` refléterait l'échec d'un step déjà terminé du même job,
-au moment où le step suivant lit son `env:`. Elle ne le fait pas.
-
-**Conséquence : l'action ne consomme plus cette expression.** Le critère de silence du
-step de secours n'est plus « le job a-t-il échoué ? » mais « un compte rendu existe-t-il
-déjà pour ce run ? ». `rendre-compte.js` répond à cette question en cherchant un
-marqueur : `<!-- deepseek-resolve:compte-rendu run=<id>-<tentative> -->`, qui porte
-l'identifiant et la tentative du run, ou un marqueur **nu**, sans suffixe, quand la
-portée est inconnue (exécution locale, harnais de test). La reconnaissance accepte les
-deux formes (`porteeDuRun()`, `marqueurCompteRendu()` dans `scripts/resolve.js` et
-`scripts/rendre-compte.js`) — sans quoi une relance de job republierait le compte rendu
-du run précédent, ou l'inverse : le tairait à tort.
-
-Le filet a été mesuré de bout en bout, faute d'un test qui puisse le faire : run
-`32462323017`, `resolve.js` tué avant toute pull request par un `base-branch`
-inexistant. Job rouge, **un** commentaire de secours publié sur l'issue, et zéro
-occurrence de `STATUT_JOB` dans le log. Ce run établit aussi qu'un step `if: always()`
-d'une composite s'exécute **jusqu'au bout** dans un job déjà rouge, ce qui n'était que
-supposé. Le silence, lui, est mesuré par le run `32462525547`. Ce que les suites ne
-pourront jamais couvrir : elles lancent `rendre-compte.js` avec un environnement
-construit de zéro, donc ne voient jamais ce qu'un step de composite reçoit.
-
-Leçon de méthode, pour tout agent qui serait tenté de trancher un point du runner en
-lisant `actions/runner` plutôt qu'en le mesurant : **une lecture du code du runner ne
-remplace pas une mesure sur le runner.** C'est ce raccourci qui a fait renoncer, au
-lot 5, au smoke test qui aurait fait mourir `resolve.js` en CI — le seul dispositif du
-dépôt qui aurait attrapé ce défaut avant un run réel. Le dépôt est resté vert pendant
-que l'action ne publiait rien. Détail de la mesure et du raisonnement :
-`plan/contrat.md`, section « Ce que vaut `${{ job.status }}` dans une composite
-action ».
+Leçon de méthode, qui vaut pour tout ce dépôt : **une lecture du code du runner — ou de
+claude-code-action — ne remplace pas une mesure sur le runner.** Ce raccourci a déjà
+laissé le dépôt vert pendant que l'action ne publiait rien.
 
 ## Pièges vérifiés
 
 Heures de débogage économisées ; aucun ne se devine à la lecture du code seul.
 
-- **`aider-chat` est figé à `0.86.2`** et épingle `litellm==1.81.10`, dont la table de
-  modèles ne connaît aucun modèle DeepSeek V4. Les seuls noms qu'aider connaît
-  nativement côté DeepSeek, `deepseek-chat` et `deepseek-reasoner`, sont **inaccessibles
-  depuis le 2026-07-24 15:59 UTC**. D'où `aider-models.json`, embarqué par l'action et
-  passé en `--model-metadata-file`, pour décrire `deepseek/deepseek-v4-pro` et
-  `deepseek/deepseek-v4-flash`. Monter `aider-version` oblige à revérifier ce fichier.
-- aider lit `git config user.name` **hors** de son bloc `try` — `aider/repo.py:291`
-  contre `:296` — donc sans identité git configurée, il plante net. `actions/checkout`
-  ne configure pas d'identité.
-- **aider ne commite pas par `git commit -a`.** Les deux appelants de `repo.commit`
-  passent une liste de fichiers explicite — `aider/coders/base_coder.py:2383` et
-  `:2419` — et la branche `cmd += ["-a"]` de `aider/repo.py:289` est morte dans ce
-  flux. Ce point est établi par lecture de source, pas par une mesure en run réel —
-  à traiter avec la même prudence que la leçon de méthode plus bas sur `job.status` :
-  une lecture peut se tromper sur ce qu'un comportement fait réellement à l'exécution.
-  Le risque plus étroit qui reste, lui, est déduit et non mesuré : `--dirty-commits`
-  (défaut `True`) commiterait un fichier que la commande de validation du consommateur
-  vient de modifier, si aider l'éditait ensuite dans le même tour — par exemple un
-  fichier de lock ou de snapshot régénéré par la validation puis retouché par aider.
-  Sans effet ici puisque l'action passe `--no-auto-commits` **et**
-  `--no-dirty-commits`, et pose `dirty-commits: false` dans `aider.conf.yml` : les
-  trois, pas seulement le premier — écrit autrement, `--no-dirty-commits` passe pour
-  redondant et se fait retirer.
-- **`--config`, `--env-file` et `--model-metadata-file` sont cherchés dans le git
-  root** — c'est-à-dire le checkout du consommateur, là où le modèle écrit. Un
-  `.aider.conf.yml` créé à l'itération 1 est donc lu à l'itération 2 et peut y fixer
-  `lint-cmd`, exécuté puisque `--auto-lint` vaut `True` par défaut.
-
-  **Et ces trois flags ne suffisent pas** — le code le dit en tête de
-  `neutraliserDecouverteAider()` : `main.py:463-477` du wheel construit
-  `default_config_files` quelle que soit la valeur de `--config`, et une clé absente de
-  notre fichier retombe sur celui du dépôt. R8 repose donc sur **quatre** mécanismes,
-  pas sur les flags :
-
-  Dans l'ordre où `appelerAider` les exécute, ce qui en fait aussi une carte de cette
-  fonction :
-
-  1. `HOME` et les `XDG_*` sont pointés sur le répertoire privé du run quand
-     l'environnement d'aider est construit, pour que la découverte dans le répertoire
-     personnel ne trouve rien ;
-  2. `neutraliserDecouverteAider()` supprime un `.aider.conf.yml` ou un
-     `.aider.model.metadata.json` **non suivi** à la racine du checkout — ces deux
-     fichiers-là, pas tous les `.aider*` ;
-  3. `mettreEnvALAbri()` sort un `.env` non suivi du dépôt le temps de l'appel, et le
-     remet en place dans un `finally` — la commande de validation du consommateur peut
-     en avoir besoin ;
-  4. `materialiserConfigurationAider()` écrit des **copies privées, réécrites à chaque
-     appel**, dans un `mkdtemp` du run — hors du checkout **et hors de
-     `$GITHUB_ACTION_PATH`**, parce que la commande de validation peut écrire dans le
-     répertoire de l'action. Les flags pointent sur ces copies, et `--env-file` vaut
-     `/dev/null`.
-
-  Un cinquième mécanisme n'appartient pas à l'appel :
-  `supprimerFichiersAiderNonSuivis()` retire **tous** les `.aider*` non suivis, et il
-  est appelé **avant chaque validation** — le cache de la carte du dépôt compris, d'où
-  sa reconstruction à chaque tour. Les portées du point 2 et de celui-ci sont
-  différentes : les confondre conduit à supprimer l'un des deux appels comme un
-  doublon.
-- Défauts de flags en `0.86.2`, relevés dans `aider/args.py` du wheel, tous à `True` :
-  `--gitignore`, `--auto-commits`, `--dirty-commits`, `--auto-lint`,
-  `--suggest-shell-commands`, `--show-model-warnings`. Un seul à `False` :
-  `--git-commit-verify` — aider commite donc avec `--no-verify`, et aucun hook
-  `pre-commit` du dépôt consommateur ne peut faire échouer ce commit.
-- **`--yes-always` refuse les commandes shell suggérées par le modèle** :
-  `aider/coders/base_coder.py:2459` passe `explicit_yes_required=True`, et
-  `aider/io.py:866-867` rend `"n"` dans ce cas précis. Une vraie protection, mais un
-  détail d'implémentation amont sur lequel l'action ne s'appuie pas seule :
-  `--no-suggest-shell-commands` est passé quand même.
+- **claude-code-action met le jeton GitHub à portée du modèle, par construction.** Elle
+  le place dans l'environnement de Claude Code (`GITHUB_TOKEN`, `GH_TOKEN` :
+  `src/entrypoints/run.ts:190` au SHA épinglé) et réécrit l'URL du remote avec
+  (`https://x-access-token:<jeton>@…`, `src/github/operations/git-config.ts:132`).
+  Mesuré au lot C : avec Bash, `cat .git/config` passe sans être dans la liste
+  blanche — Claude Code autorise d'office les lectures dans le répertoire de travail.
+  D'où **Claude Code sans Bash** (`--disallowedTools "Bash,…"`) et `deny` sur
+  `./.git/**`. Ne pas rendre Bash au modèle pour « qu'il puisse lancer les tests » : un
+  test qu'il écrit est du code qui lit l'environnement, et aucune règle `deny` ne filtre
+  ce que fait le code lancé. Les tests, c'est `verifier.js`.
+- **`.git/config` est restauré depuis la sauvegarde de `preparer.js`**, avant et après
+  les tests, et au début de `conclure.js`. Avant : effacer le jeton que
+  claude-code-action y a mis. Après : défaire ce qu'un test a pu y poser
+  (`core.fsmonitor` est exécuté par `git status`, donc dans `conclure.js`, qui porte
+  le jeton). `commit` et `push` passent en plus `-c core.hooksPath=/dev/null`
+  (`SANS_HOOKS`) : un test peut déposer un hook. Les deux sont exercés par
+  `test/etapes.test.js`.
+- **`persist-credentials: false` est exigé du consommateur, et vérifié.**
+  `preparer.js` refuse un checkout qui a laissé un `extraheader` ou un `include.path`
+  dans la configuration git. Toutes les commandes git distantes — `ls-remote`,
+  `fetch`, `push` — portent `prefixeAuthentification()` (`scripts/lib/action.js`).
+  Ne l'avoir mis que sur le push a déjà tué un run réel en `could not read Username`.
+- **`--allowedTools` veut des virgules.** Mesuré au lot C : `"Read Edit Write"`
+  arrive comme **une seule** entrée, et la restriction voulue n'est pas appliquée.
+  `test/action.test.js` épingle la liste découpée par virgules.
+- **En mode agent, claude-code-action ne publie rien** : ni commentaire de suivi, ni
+  branche, ni PR. C'est voulu ici — nos steps s'en chargent —, mais la réponse finale du
+  modèle n'existe que dans `execution_file`. `conclure.js` la lit et la publie,
+  nettoyée et bornée. Ce fichier n'est écrit qu'en fin de session.
+- **`github_token` doit être passé à claude-code-action**, sinon elle tente un échange
+  OIDC contre un jeton de sa GitHub App, absente des dépôts consommateurs.
+- **`CLAUDE_CODE_MAX_CONTEXT_TOKENS` fixe la fenêtre d'un modèle non-Claude**, pas
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW`. Sans elle, Claude Code suppose 200 000 tokens.
+  D'où l'input `context-window`.
+- **Le proxy impose son modèle.** `SCW_MODELE` remplace le modèle demandé par Claude
+  Code, qui ne fait que le journaliser. La clé amont passe par un **fichier**
+  (`SCW_CLE_FICHIER`), supprimé dès le démarrage, et le proxy tourne sous
+  `env -u SCW_SECRET_KEY` : `/proc/<pid>/environ` est lisible par tout processus du
+  même utilisateur.
 - Le stub `gh` ne doit **jamais** être `/bin/true` : `__fixtures__/gh-stub.sh` répond
   `[]` par défaut, ce que `gh pr list --json number` attend. Un binaire qui ne rend
   rien fait lever `JSON.parse('')` dans le script appelant, pas dans le stub — l'échec
@@ -298,34 +214,12 @@ Heures de débogage économisées ; aucun ne se devine à la lecture du code seu
   `estCheminInterdit('sous/')` rend `true`. Ne pas retirer cette garde comme
   redondante avec `-uall` : `git add` sur un dépôt imbriqué enregistrerait un gitlink
   vers un commit absent.
-- **Les TROIS commandes git distantes portent le préfixe d'authentification, pas
-  seulement le push.** `construirePrefixeAuthentification()` sert à `ls-remote`
-  (`scripts/lib/git.js`, R9), aux deux `fetch` de `resoudreBase` et
-  `etablirBrancheTravail`, et au `push` de `pousser`. D'où l'ordre des étapes de
-  `preparer()` : le préfixe est construit **avant** la résolution de la base, parce
-  que les étapes suivantes en ont besoin. N'avoir authentifié que le push a été un
-  vrai défaut, tenu jusqu'au premier déroulé sur un runner : sous
-  `persist-credentials: false` — la configuration que le README recommande — le
-  `ls-remote` sortait en `fatal: could not read Username for 'https://github.com'`
-  et le job mourait avant le premier appel à aider. **Les sept suites étaient
-  vertes**, et elles ne pouvaient pas ne pas l'être : les dépôts jetables du
-  harnais ont un `origine` local, joignable sans jeton. C'est pour ça que le cas
-  qui ferme ce trou (`test/boucle.test.js`, « R7 — tout appel git distant porte le
-  préfixe ») est un **lecteur statique de source** et non une exécution. Il
-  reconnaît deux formes de tableau — l'appel inline `git([...prefixeAuth, 'fetch',
-  …])` et le tableau nommé `const argumentsPush = [...]` de `pousser()` — et un
-  second cas exige d'en trouver au moins quatre, pour qu'un changement de forme le
-  fasse rougir au lieu de le rendre vert et muet.
 - **Le `GITHUB_TOKEN` n'a pas le droit « workflows ».** Toute écriture sous
   `.github/workflows/**` fait échouer le **push**, et le refus porte sur les commits
   poussés, pas sur l'état final de la branche : restaurer le fichier au tour suivant ne
   suffit donc pas, le commit fautif reste dans l'histoire. C'est toute la raison d'être
-  de `scripts/lib/chemins.js` et du commit sur **liste explicite de chemins** plutôt que
-  d'un `git commit -a`. Sans cette note, ces deux mécanismes paraissent gratuits.
-- `git checkout -- <entrée « ?? »>` **échoue** en `pathspec did not match any file known
-  to git` : un fichier non suivi n'a rien à restaurer. La restauration du travail refusé
-  distingue donc suivi et non suivi, et n'utilise jamais `git checkout -- .`, qui
-  écraserait aussi le travail légitime.
+  de `scripts/lib/chemins.js` et du commit sur **liste explicite de chemins** dans
+  `conclure.js`, plutôt que d'un `git commit -a`. Sans cette note, ces deux mécanismes paraissent gratuits.
 - **`author_association` n'est pas une permission**, et c'est pour ça que la garde a deux
   étages. `MEMBER` dit « membre de l'organisation », `COLLABORATOR` inclut `read` et
   `triage`, et GitHub ne renvoie qu'**une seule** valeur — donc un mainteneur qui a déjà
@@ -333,42 +227,26 @@ Heures de débogage économisées ; aucun ne se devine à la lecture du code seu
   `gh api repos/{o}/{r}/collaborators/{login}/permission` et exige `write`, `maintain`
   ou `admin`. Un agent qui « simplifierait » `garde.js` en retirant cet étage ouvrirait
   la porte à un compte en lecture seule.
-- **`pipx` est préinstallé sur les images Ubuntu.** Ne pas ajouter d'étape
-  d'installation, et surtout pas un `curl … | sh` : `action.yml` se contente de
-  contrôler sa présence et d'expliquer l'absence sur un runner auto-hébergé.
-- **R11 — le runner est épinglé en dur.** `actions/setup-python` installe le `3.12` de
-  l'input `python-version`, et `pipx install --python "$(which python)"` s'en sert ; mais
-  l'exemple du README impose `ubuntu-24.04` en dur, et `test/ci.test.js` interdit
-  `ubuntu-latest` dans le workflow du dépôt — deux cas dédiés, dont un sur le contenu
-  entier du fichier. Motif : `ubuntu-latest` basculera sur 26.04, dont le Python 3.14
-  est hors de la borne `<3.13` d'aider-chat, et cette action n'est vérifiée que sur
-  l'image 24.04.
-- **R7 — rien de brut ne sort.** `scripts/lib/texte.js` porte les trois primitives que
-  tout le reste utilise : `masquerSecrets` (idempotente, appliquée jusque dans la
-  journalisation, y compris comme filet en sortie), `nettoyerTexteTiers` (commentaires
-  HTML, caractères de contrôle, invisibles) et `tronquer` (tête **et** queue). Aucune
-  sortie **brute** de validation ni de aider n'atteint un commentaire de PR. Ce qui y
-  passe est masqué et borné, et rien d'autre : le nom du premier test en échec, les
-  chemins refusés du tour, et un motif d'échec court et mono-ligne extrait de la sortie
-  d'aider. Trois canaux étroits, pas zéro — et le README dit pourquoi ils restent un
-  risque résiduel.
-
-  **Un quatrième canal est délibéré, et ne doit pas être confondu avec une fuite** : le
-  corps de la pull request initiale publie la **consigne exacte** envoyée à aider, texte
-  tiers compris, dans un bloc `<details>`. C'est l'atténuation de R6 — sans elle, une
-  injection cachée dans un `<!-- … -->` reste invisible au relecteur. Ne pas la retirer
-  en croyant fermer une fuite : elle est là pour en révéler une. L'environnement de
-  la commande de validation est filtré, celui d'aider est une liste blanche. Retirer un
-  seul de ces appels ne fait rien planter — c'est exactement pourquoi
-  `test/texte.test.js` et le cas R7 de `test/boucle.test.js` existent.
+- **R7 — rien de brut ne sort.** `scripts/lib/texte.js` porte `masquerSecrets`,
+  `nettoyerTexteTiers` (commentaires HTML, caractères de contrôle, invisibles) et
+  `tronquer` (tête **et** queue). Ce qui atteint un commentaire de PR — fin de la sortie
+  des tests, dernière réponse du modèle, chemins refusés — est nettoyé, masqué et
+  borné. **Un canal est délibéré, et ne doit pas être confondu avec une fuite** : le
+  corps de la PR publie la **consigne exacte** envoyée au modèle. Sans elle, une
+  injection cachée dans un `<!-- … -->` resterait invisible au relecteur.
 - **La garde protège le déclencheur, pas la consigne.** Le corps de l'issue peut
   avoir été écrit par quelqu'un d'autre que l'auteur du `@dseek` — c'est le cas
   d'usage nominal, pas une anomalie. Un bloc `<!-- … -->` y est invisible dans le
   rendu GitHub. Ne pas écrire, ni laisser croire, que la garde suffit à elle seule :
   une version antérieure de ce fichier le faisait, et cela clôturait la réflexion sur
   R6 avant même de la commencer.
+- **Risque résiduel, non fermé, à ne pas présenter comme couvert :** les tests tournent
+  sous le même utilisateur que `conclure.js`. Un processus qu'un test laisse en tâche
+  de fond peut lire `/proc/<pid>/environ` du step qui porte le jeton, ou réécrire un
+  script de l'action avant qu'il ne tourne. Seuls un conteneur ou un job sans jeton le
+  fermeraient.
 
 ## Langue
 
-Code, commentaires, messages de commit, prompts DeepSeek et commentaires publiés
-sur les PR : tout est en français. S'y tenir.
+Code, commentaires, messages de commit, consignes envoyées au modèle et commentaires
+publiés sur les PR : tout est en français. S'y tenir.
