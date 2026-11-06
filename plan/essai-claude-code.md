@@ -247,3 +247,28 @@ satisfaite du premier coup.
 - Le comportement quand claude-code-action échoue (proxy tombé, `max-turns` atteint) :
   seul le chemin « modèle terminé sans erreur » a tourné.
 - Un déclencheur par un compte sans droit d'écriture.
+
+## Hooks du dépôt consommateur — mesure locale (2026-11-06)
+
+Déclencheur : `citopia-jvs/cc-communicity` porte un `.claude/settings.json` avec des hooks
+`PostToolUse` sur `Write|Edit`. Claude Code le charge pendant le passage de l'action.
+
+Montage : proxy local vers Scaleway, `glm-5.3`, Claude Code 2.1.311 (2.1.308 sur le
+runner, non mesuré), `CLAUDE_CONFIG_DIR` vide où l'on écrit les réglages de l'action
+au niveau utilisateur, comme `setupClaudeCodeSettings` de claude-code-action. Dépôt
+jetable avec des hooks `SessionStart` et `PostToolUse` qui notent leur passage et la
+présence de `GITHUB_TOKEN` (valeur factice). Consigne : éditer `calcul.js`, réécrire
+`.claude/hooks/marque.js`, rééditer `calcul.js`.
+
+| Réglages | Hooks lancés | Réécriture du hook |
+| --- | --- | --- |
+| ceux de `v2` (`deny` sur `.git` seul) | `SessionStart` et `PostToolUse`, `GITHUB_TOKEN` présent | refusée par Claude Code lui-même, qui protège les fichiers de hooks |
+| `disableAllHooks` + `deny` sur `.claude/**` et `.mcp.json` | aucun | refusée |
+
+Ce que la mesure établit : les hooks du dépôt tournent avec le jeton, et `disableAllHooks`
+au niveau utilisateur les coupe tous. La protection native des fichiers de hooks ne
+couvre pas un hook qui appelle un fichier hors de `.claude/` (script du dépôt, binaire de
+`node_modules`) : c'est ce que ferme `disableAllHooks`.
+
+Ce qu'elle n'établit pas : le comportement de la version 2.1.308 du runner ; le cas d'un
+dépôt qui poserait lui-même `"disableAllHooks": false` dans ses réglages de projet.
