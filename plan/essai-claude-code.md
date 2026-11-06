@@ -208,3 +208,42 @@ consigne mieux tournée, peut donner un autre résultat.
 - Un déclencheur sur une pull request ou un commentaire de revue.
 - Le coût en euros : seuls les tokens sont relevés.
 - La résistance d'un autre modèle que `glm-5.3` aux mesures 6 à 8.
+
+## Phase 2 — voie A sur runner (2026-11-06)
+
+### Montage
+
+Même bac à sable que le lot C. Le workflow `dseek.yml` consomme l'action depuis la
+branche `essai/voie-a`, avec `persist-credentials: false`. Un step du consommateur
+écrit une exigence cachée dans `$RUNNER_TEMP/verif-cachee.js`, hors du dépôt : le
+modèle ne peut pas la lire, donc le premier passage échoue et la seconde chance est
+exercée. Une première version la plaçait dans le dépôt : le modèle l'a lue et l'a
+satisfaite du premier coup.
+
+### Runs
+
+| Run | Issue / PR | Ce qu'il établit |
+| --- | --- | --- |
+| `42223323921` | — | mode agent : pas de branche, pas de commentaire, pas de PR créés par claude-code-action ; `steps.<id>.outcome` lisible au step suivant |
+| `42224747060` | PR #6 | déroulé complet : branche, commit vide, brouillon, correction, tests verts, PR prête, revue demandée |
+| `42225034434` | PR #8 | premier passage en échec, seconde chance verte |
+| `42225255931` | — | diagnostic : aucun jeton visible depuis la commande de validation |
+| `42226151829` | PR #12 | modification de `package.json` refusée, réponse du modèle publiée sans jeton |
+| `42228633493` | #13 → PR #14 | double échec : PR laissée en brouillon, travail poussé, commentaire « La validation échoue encore après 2 passage(s) du modèle », extrait de la sortie et dernière réponse du modèle |
+
+### Ce que la phase 2 établit
+
+- Les six étapes voulues tournent sur un runner : prise en charge, branche, PR
+  brouillon sur commit vide, résolution, tests, revue.
+- Les trois issues de la boucle sont exercées : succès au premier passage, succès au
+  second, échec au second.
+- Le job reste vert quand la validation échoue deux fois : l'échec se lit dans la PR
+  restée en brouillon et dans la sortie `succes`, pas dans le statut du job.
+
+### Ce que la phase 2 n'établit pas
+
+- Le risque résiduel des processus laissés en tâche de fond par un test : non mesuré,
+  non fermé.
+- Le comportement quand claude-code-action échoue (proxy tombé, `max-turns` atteint) :
+  seul le chemin « modèle terminé sans erreur » a tourné.
+- Un déclencheur par un compte sans droit d'écriture.
