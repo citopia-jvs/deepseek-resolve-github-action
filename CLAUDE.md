@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Ce qu'est ce dépôt
 
 Composite action GitHub qui tente de résoudre une issue avec Claude Code, branché sur
-un modèle Scaleway. Déclencheur : `@agent` dans une issue ou un commentaire d'issue,
+un modèle Scaleway. Déclencheur : `@ag-resolve` dans une issue ou un commentaire d'issue,
 écrit par quelqu'un qui a le droit d'écriture. L'action prend l'issue en charge, crée
 la branche `fix-issue-<n>`, ouvre une PR brouillon sur un commit vide, fait passer
 Claude Code, lance elle-même les tests, donne **une** seconde chance au modèle en cas
@@ -235,7 +235,7 @@ Heures de débogage économisées ; aucun ne se devine à la lecture du code seu
   corps de la PR publie la **consigne exacte** envoyée au modèle. Sans elle, une
   injection cachée dans un `<!-- … -->` resterait invisible au relecteur.
 - **La garde protège le déclencheur, pas la consigne.** Le corps de l'issue peut
-  avoir été écrit par quelqu'un d'autre que l'auteur du `@agent` — c'est le cas
+  avoir été écrit par quelqu'un d'autre que l'auteur du `@ag-resolve` — c'est le cas
   d'usage nominal, pas une anomalie. Un bloc `<!-- … -->` y est invisible dans le
   rendu GitHub. Ne pas écrire, ni laisser croire, que la garde suffit à elle seule :
   une version antérieure de ce fichier le faisait, et cela clôturait la réflexion sur
