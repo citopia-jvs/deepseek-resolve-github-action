@@ -6,7 +6,7 @@
   },
   "comment": {
     "id": 2001,
-    "body": "@ag-resolve relance la correction, le test est toujours rouge.",
+    "body": "/use-bot relance la correction, le test est toujours rouge.",
     "user": { "login": "mainteneuse" },
     "author_association": "OWNER"
   }

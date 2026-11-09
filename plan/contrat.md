@@ -28,7 +28,7 @@ Ces valeurs ne sont pas des points ouverts. Elles sont relevées et vérifiées.
 | Quoi | Valeur | Source |
 | --- | --- | --- |
 | Dépôt | `citopia-jvs/deepseek-resolve-github-action` | relevé sur `git remote get-url origin`. L'alias `github-pro` est un `Host` SSH du poste, pas le nom du dépôt |
-| Référence dans un exemple copiable | `@v2` | tag flottant, à poser sur le premier `v2.x.y` vert de la refonte. `@v1` désigne l'ancienne action aider + DeepSeek et ne bouge plus |
+| Référence dans un exemple copiable | `@v3` | tag flottant, suit le dernier `v3.x.y`. `v3` change le mot d'appel en `/use-bot` ; `@v2` garde l'ancien et ne bouge plus. `@v1` désigne l'ancienne action aider + DeepSeek et ne bouge plus |
 
 ## Déroulé de `action.yml`
 

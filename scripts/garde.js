@@ -3,7 +3,7 @@
 
 // Garde d'entrée de l'action. Décide si le reste du job doit tourner.
 //
-// Tourne AVANT l'installation d'aider : un commentaire sans « @ag-resolve » coûte
+// Tourne AVANT l'installation d'aider : un commentaire sans « /use-bot » coûte
 // alors quelques centaines de millisecondes au lieu d'une minute de runner.
 //
 // Trois règles de comportement, non négociables :
@@ -20,7 +20,7 @@
 //
 // Ce que cette garde fait : contrôler QUI déclenche.
 // Ce qu'elle ne fait pas : contrôler le TEXTE de la consigne. Le corps de l'issue
-// peut avoir été rédigé par quelqu'un d'autre que l'auteur du « @ag-resolve » — c'est
+// peut avoir été rédigé par quelqu'un d'autre que l'auteur du « /use-bot » — c'est
 // même le cas nominal. Voir R6 dans plan/README.md, traité au lot 3b.
 //
 // Bibliothèque standard uniquement, CommonJS : aucune dépendance.
@@ -35,11 +35,12 @@ const { nettoyerTexteTiers, masquerSecrets, tronquer } = require('./lib/texte.js
 // README doit être refusé par une règle, pas par effet de bord.
 const EVENEMENTS_AUTORISES = ['issues', 'issue_comment'];
 
-const MENTION = '@ag-resolve';
-// Mention isolée : ni « @ag-resolver », ni « @ag-resolve-x », ni une adresse
-// « a@ag-resolve.fr ». Un point final reste admis : « merci @ag-resolve. ».
+const MENTION = '/use-bot';
+// Mention isolée : ni « /use-bots », ni « /use-bot-x », ni un chemin ou une URL
+// « src/use-bot », « /use-bot/config », « /use-bot.js ». Un point final reste
+// admis : « merci /use-bot. ».
 // Même expression dans scripts/preparer.js : les deux doivent rester d'accord.
-const MOTIF_MENTION = /(?<![\p{L}\p{N}_.@-])@ag-resolve(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])/iu;
+const MOTIF_MENTION = /(?<![\p{L}\p{N}_.@/-])\/use-bot(?![\p{L}\p{N}_/-]|\.[\p{L}\p{N}])/iu;
 
 // Étage 1 de l'autorisation : valeur calculée par GitHub, non falsifiable, gratuite.
 const ASSOCIATIONS_PAR_DEFAUT = 'OWNER,MEMBER,COLLABORATOR';
@@ -353,7 +354,7 @@ function principal() {
 
   const source = estCommentaire ? commentaire : issue;
   // nettoyerTexteTiers avant toute recherche : la mention doit être celle que le
-  // lecteur voit. Un « @ag-resolve » caché dans un <!-- … --> ou fabriqué avec des
+  // lecteur voit. Un « /use-bot » caché dans un <!-- … --> ou fabriqué avec des
   // caractères de largeur nulle ne doit pas décider à la place d'un humain (R6).
   const texte = nettoyerTexteTiers(typeof source.body === 'string' ? source.body : '');
   const acteur = String((source.user && source.user.login) || '').trim();
@@ -367,8 +368,8 @@ function principal() {
   if (payload.action === 'edited') {
     // Texte BRUT, sans nettoyage, contrairement au texte courant. Ce contrôle
     // répond à « la mention était-elle déjà là ? », pas à « était-elle visible ? ».
-    // Nettoyer ici inverserait son sens : un ancien « <!-- @ag-resolve --> » devenu
-    // « @ag-resolve » en clair passerait pour une demande nouvelle alors que le contenu
+    // Nettoyer ici inverserait son sens : un ancien « <!-- /use-bot --> » devenu
+    // « /use-bot » en clair passerait pour une demande nouvelle alors que le contenu
     // textuel n'a pas bougé. Au moindre doute sur la nouveauté, on refuse.
     const ancien =
       payload.changes && payload.changes.body && typeof payload.changes.body.from === 'string'
@@ -413,7 +414,7 @@ function principal() {
     );
   }
 
-  // Étage 2 bis : l'auteur de l'issue n'est pas forcément l'auteur du « @ag-resolve ».
+  // Étage 2 bis : l'auteur de l'issue n'est pas forcément l'auteur du « /use-bot ».
   // S'il n'a pas le droit d'écriture, on ne refuse PAS : on passe en mode consigne
   // restreinte, où seul le texte du commentaire fait consigne et le corps de
   // l'issue est fourni en données non fiables. Atténuation de R6, pas barrière.

@@ -185,7 +185,7 @@ test('preparer : consigne restreinte, le commentaire est la consigne et le corps
   const evenement = {
     action: 'created',
     issue: ISSUE,
-    comment: { body: '@ag-resolve corrige seulement calcul.js', user: { login: 'bob' } },
+    comment: { body: '/use-bot corrige seulement calcul.js', user: { login: 'bob' } },
   };
   const r = lancer('preparer.js', depot, envPreparer(depot, evenement, { CONSIGNE_RESTREINTE: 'true' }));
   assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -197,19 +197,19 @@ test('preparer : consigne restreinte, le commentaire est la consigne et le corps
   assert.match(c, /DÉBUT DU RAPPORT NON VÉRIFIÉ[\s\S]*La moyenne est fausse[\s\S]*FIN DU RAPPORT NON VÉRIFIÉ/);
 });
 
-test('preparer : la consigne part de la mention isolée, pas d\'une adresse qui la contient', () => {
+test('preparer : la consigne part de la mention isolée, pas d\'une occurrence non isolée placée avant', () => {
   const depot = monterDepot();
   const evenement = {
     action: 'created',
     issue: ISSUE,
-    comment: { body: 'Signalé par contact@ag-resolve.fr. @ag-resolve corrige seulement calcul.js', user: { login: 'bob' } },
+    comment: { body: 'Voir docs/use-bot.md. /use-bot corrige seulement calcul.js', user: { login: 'bob' } },
   };
   const r = lancer('preparer.js', depot, envPreparer(depot, evenement, { CONSIGNE_RESTREINTE: 'true' }));
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const c = r.sorties.consigne;
   const consigne = c.slice(c.indexOf('# Consigne'), c.indexOf('# Contexte'));
   assert.match(consigne, /corrige seulement calcul\.js/);
-  assert.doesNotMatch(consigne, /contact@|\.fr\./);
+  assert.doesNotMatch(consigne, /docs|\.md\./);
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

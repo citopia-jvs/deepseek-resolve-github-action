@@ -2,7 +2,7 @@
   "action": "opened",
   "issue": {
     "number": 42,
-    "body": "`npm run build` échoue depuis la montée de version de la dépendance.\n\n@ag-resolve peux-tu corriger ?",
+    "body": "`npm run build` échoue depuis la montée de version de la dépendance.\n\n/use-bot peux-tu corriger ?",
     "user": { "login": "mainteneuse" },
     "author_association": "OWNER"
   }

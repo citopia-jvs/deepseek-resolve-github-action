@@ -27,11 +27,12 @@ const {
   SANS_HOOKS,
 } = require('./lib/action.js');
 
-const MENTION = '@ag-resolve';
-// Mention isolée : ni « @ag-resolver », ni « @ag-resolve-x », ni une adresse
-// « a@ag-resolve.fr ». Un point final reste admis : « merci @ag-resolve. ».
+const MENTION = '/use-bot';
+// Mention isolée : ni « /use-bots », ni « /use-bot-x », ni un chemin ou une URL
+// « src/use-bot », « /use-bot/config », « /use-bot.js ». Un point final reste
+// admis : « merci /use-bot. ».
 // Même expression dans scripts/garde.js : les deux doivent rester d'accord.
-const MOTIF_MENTION = /(?<![\p{L}\p{N}_.@-])@ag-resolve(?![\p{L}\p{N}_-]|\.[\p{L}\p{N}])/iu;
+const MOTIF_MENTION = /(?<![\p{L}\p{N}_.@/-])\/use-bot(?![\p{L}\p{N}_/-]|\.[\p{L}\p{N}])/iu;
 const MOTIF_BRANCHE = /^fix-issue-\d+$/;
 const LONGUEUR_MAX_TITRE = 200;
 const LONGUEUR_MAX_CORPS = 20000;
@@ -146,7 +147,7 @@ function neutraliser(texte) {
  * Rédige la consigne passée à claude-code-action.
  *
  * Seul le texte dont la garde a vérifié l'auteur devient une instruction : le
- * corps de l'issue sur un événement `issues`, le commentaire après `@ag-resolve` sur
+ * corps de l'issue sur un événement `issues`, le commentaire après `/use-bot` sur
  * un `issue_comment`. Le reste est présenté comme des données. Tous les textes
  * sont passés par `nettoyerTexteTiers` : un commentaire HTML, invisible dans le
  * rendu GitHub, n'atteint pas le modèle.

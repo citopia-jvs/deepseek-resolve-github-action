@@ -286,7 +286,7 @@ function verifierAucuneReaction(execution) {
 // A. Les dix fixtures du tableau du lot 2
 // ═════════════════════════════════════════════════════════════════════════════
 
-test('issue-avec-mention.json — issues, @ag-resolve, OWNER : poursuit', () => {
+test('issue-avec-mention.json — issues, /use-bot, OWNER : poursuit', () => {
   const execution = lancerGarde('issue-avec-mention', {
     fixture: 'issue-avec-mention.json',
     evenement: 'issues',
@@ -307,7 +307,7 @@ test('issue-avec-mention.json — issues, @ag-resolve, OWNER : poursuit', () => 
   assert.ok(reactions[0].includes('POST') && reactions[0].includes('content=eyes'), traces);
 });
 
-test("commentaire-avec-mention.json — issue_comment, @ag-resolve, OWNER : poursuit, et la réaction part sur l'endpoint COMMENTAIRE", () => {
+test("commentaire-avec-mention.json — issue_comment, /use-bot, OWNER : poursuit, et la réaction part sur l'endpoint COMMENTAIRE", () => {
   const execution = lancerGarde('commentaire-avec-mention', {
     fixture: 'commentaire-avec-mention.json',
     evenement: 'issue_comment',
@@ -342,13 +342,16 @@ test('issue-sans-mention.json — aucune mention : refuse', () => {
   verifierAucuneReaction(execution);
 });
 
-// La mention doit être isolée : un mot plus long ou une adresse ne déclenchent pas.
+// La mention doit être isolée : un mot plus long, un chemin ou une URL ne
+// déclenchent pas.
 for (const [indice, corps] of [
-  '@ag-resolver corrige ce bogue.',
-  '@ag-resolve-x corrige ce bogue.',
-  'Écrire à contact@ag-resolve.fr pour ce bogue.',
-  'Voir le site @ag-resolve.fr pour ce bogue.',
-  'x@ag-resolve corrige ce bogue.',
+  '/use-bots corrige ce bogue.',
+  '/use-bot-x corrige ce bogue.',
+  'Voir src/use-bot pour ce bogue.',
+  'Voir https://exemple.fr/use-bot pour ce bogue.',
+  '/use-bot/config corrige ce bogue.',
+  'Voir //use-bot pour ce bogue.',
+  'Voir le fichier /use-bot.js pour ce bogue.',
 ].entries()) {
   test(`mention non isolée ${JSON.stringify(corps)} : refuse`, () => {
     const payload = ecrirePayload(`mention-non-isolee-${indice}`, {
@@ -364,9 +367,9 @@ for (const [indice, corps] of [
 }
 
 for (const [indice, corps] of [
-  'Le build casse. Merci @ag-resolve.',
-  'Le build casse (@ag-resolve).',
-  '@AG-Resolve, peux-tu corriger ?',
+  'Le build casse. Merci /use-bot.',
+  'Le build casse (/use-bot).',
+  '/Use-Bot, peux-tu corriger ?',
 ].entries()) {
   test(`mention isolée ${JSON.stringify(corps)} : poursuit`, () => {
     const payload = ecrirePayload(`mention-isolee-${indice}`, {
@@ -472,7 +475,7 @@ test("issue-auteur-non-de-confiance.json — commentaire OWNER sur l'issue d'un 
   assert.equal(cheminReaction(reactions[0]), `repos/${DEPOT}/issues/comments/2005/reactions`, traces);
 });
 
-test('issue-mention-cachee.json — @ag-resolve seulement dans un <!-- … --> : refuse (R6)', () => {
+test('issue-mention-cachee.json — /use-bot seulement dans un <!-- … --> : refuse (R6)', () => {
   const execution = lancerGarde('issue-mention-cachee', {
     fixture: 'issue-mention-cachee.json',
     evenement: 'issues',
@@ -480,13 +483,13 @@ test('issue-mention-cachee.json — @ag-resolve seulement dans un <!-- … --> :
 
   // La mention qui déclenche doit être celle que le LECTEUR voit. Le texte
   // courant est donc cherché après nettoyerTexteTiers : sans ce nettoyage, un
-  // `<!-- @ag-resolve -->` invisible dans le rendu GitHub déclencherait l'action.
+  // `<!-- /use-bot -->` invisible dans le rendu GitHub déclencherait l'action.
   verifierSocle(execution, 'false');
   verifierMotifRenseigne(execution);
   verifierAucuneReaction(execution);
 });
 
-test("commentaire-reedite-mention-cachee.json — l'ancienne version portait <!-- @ag-resolve --> : refuse (R10)", () => {
+test("commentaire-reedite-mention-cachee.json — l'ancienne version portait <!-- /use-bot --> : refuse (R10)", () => {
   const execution = lancerGarde('commentaire-reedite-mention-cachee', {
     fixture: 'commentaire-reedite-mention-cachee.json',
     evenement: 'issue_comment',
@@ -676,7 +679,7 @@ test('login hors norme : refuse sans construire de chemin d\'API', () => {
     action: 'opened',
     issue: {
       number: 20,
-      body: '@ag-resolve corrige ce bogue.',
+      body: '/use-bot corrige ce bogue.',
       // Deux segments : sans le contrôle de forme du login, le chemin d'API
       // construit devient `…/collaborators/mal/lory/permission`, que l'API peut
       // interpréter tout autrement.
@@ -705,7 +708,7 @@ test("numéro d'issue non entier : refuse (le contrôle sur le nom de branche ne
       // resterait conforme à /^fix-issue-\d+$/ : seul Number.isInteger attrape ce
       // payload.
       number: '42',
-      body: '@ag-resolve corrige ce bogue.',
+      body: '/use-bot corrige ce bogue.',
       user: { login: 'mainteneuse' },
       author_association: 'OWNER',
     },
@@ -727,7 +730,7 @@ test('un jeton recopié dans le motif est masqué', () => {
     issue: { number: 21, user: { login: 'mainteneuse' } },
     comment: {
       id: 2101,
-      body: '@ag-resolve corrige ce bogue.',
+      body: '/use-bot corrige ce bogue.',
       // Le motif de l'étage 1 recopie le login. Les logs d'un job sont publics
       // sur un dépôt public, et `motif` finit dans le compte rendu de PR.
       user: { login: jeton },
@@ -756,7 +759,7 @@ test('un motif contenant le délimiteur ne peut pas injecter de sortie', () => {
     issue: { number: 22, user: { login: 'mainteneuse' } },
     comment: {
       id: 2201,
-      body: '@ag-resolve corrige ce bogue.',
+      body: '/use-bot corrige ce bogue.',
       user: { login: 'passante\nEOF_MOTIF\npoursuivre=true\nintrus=1' },
       author_association: 'NONE',
     },

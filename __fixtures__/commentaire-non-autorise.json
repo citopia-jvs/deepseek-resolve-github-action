@@ -6,7 +6,7 @@
   },
   "comment": {
     "id": 2003,
-    "body": "@ag-resolve corrige ce bogue s'il te plaît.",
+    "body": "/use-bot corrige ce bogue s'il te plaît.",
     "user": { "login": "passante" },
     "author_association": "NONE"
   }

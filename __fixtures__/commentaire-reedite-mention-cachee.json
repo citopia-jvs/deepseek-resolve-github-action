@@ -2,7 +2,7 @@
   "action": "edited",
   "changes": {
     "body": {
-      "from": "Petit rappel sur ce sujet. <!-- @ag-resolve -->"
+      "from": "Petit rappel sur ce sujet. <!-- /use-bot -->"
     }
   },
   "issue": {
@@ -11,7 +11,7 @@
   },
   "comment": {
     "id": 2006,
-    "body": "Petit rappel sur ce sujet. @ag-resolve",
+    "body": "Petit rappel sur ce sujet. /use-bot",
     "user": { "login": "mainteneuse" },
     "author_association": "OWNER"
   }
