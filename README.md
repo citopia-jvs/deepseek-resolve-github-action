@@ -5,7 +5,7 @@ GitHub Action qui tente de résoudre automatiquement une issue avec
 [Scaleway Generative APIs](https://www.scaleway.com/fr/generative-apis/) par un
 petit proxy livré avec l'action.
 
-Quand une issue — ou un commentaire d'issue — contient `@ag-resolve`, écrit par quelqu'un
+Quand une issue — ou un commentaire d'issue — contient `/use-bot`, écrit par quelqu'un
 qui a le droit d'écriture, l'action déroule tout le processus :
 
 1. **prise en compte** : un commentaire sur l'issue annonce la pull request ;
@@ -15,7 +15,7 @@ qui a le droit d'écriture, l'action déroule tout le processus :
 5. **vérification** : l'action lance elle-même la commande de validation. Si elle
    échoue, Claude Code reçoit la sortie des tests et a **une** seconde chance ;
 6. **demande de revue** : tests verts, la PR passe en « prête » et la revue est
-   demandée à l'auteur du `@ag-resolve`. Tests rouges après deux passages, le travail est
+   demandée à l'auteur du `/use-bot`. Tests rouges après deux passages, le travail est
    quand même poussé et la PR reste en brouillon, avec un commentaire qui dit
    pourquoi.
 
@@ -25,12 +25,13 @@ bouge plus.
 
 > **⚠️ Projet en cours de développement.** Le déroulé complet a été exécuté de bout
 > en bout sur un dépôt d'essai, avec `glm-5.3`, seconde chance comprise : mesures dans
-> `plan/essai-claude-code.md`. Le tag `v2` n'est pas encore posé. Lire la section
+> `plan/essai-claude-code.md`. `v2` se déclenche avec l'ancien mot d'appel : utiliser
+> `v3`. Lire la section
 > [Sécurité](#sécurité) avant toute installation.
 
 ## Utilisation
 
-Dans le dépôt à équiper, créer `.github/workflows/ag-resolve.yml` :
+Dans le dépôt à équiper, créer `.github/workflows/use-bot.yml` :
 
 ```yaml
 on:
@@ -45,21 +46,21 @@ permissions:
   issues: write
 
 concurrency:
-  group: ag-resolve-${{ github.event.issue.number }}
+  group: use-bot-${{ github.event.issue.number }}
   cancel-in-progress: false
 
 jobs:
   resoudre:
     if: >-
-      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '@ag-resolve')) ||
-      (github.event_name == 'issues' && contains(github.event.issue.body, '@ag-resolve'))
+      (github.event_name == 'issue_comment' && contains(github.event.comment.body, '/use-bot')) ||
+      (github.event_name == 'issues' && contains(github.event.issue.body, '/use-bot'))
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - uses: citopia-jvs/deepseek-resolve-github-action@v2
+      - uses: citopia-jvs/deepseek-resolve-github-action@v3
         with:
           scaleway-api-key: ${{ secrets.SCW_SECRET_KEY }}
           scaleway-base-url: ${{ vars.SCW_BASE_URL }}
@@ -77,13 +78,13 @@ Points de cet exemple qui ne sont pas des préférences de style :
   écrit par le modèle. L'action refuse de démarrer dans ce cas, avec un message qui
   le dit.
 - **`runs-on: ubuntu-24.04` en dur.** L'action n'est vérifiée que sur cette image.
-- **Le bloc `concurrency`.** Deux `@ag-resolve` rapprochés sur la même issue lanceraient
+- **Le bloc `concurrency`.** Deux `/use-bot` rapprochés sur la même issue lanceraient
   deux jobs sur la même branche. Une composite action ne peut pas porter
   `concurrency` elle-même.
 - **Le `if:` du job.** Il évite de démarrer un runner pour chaque commentaire
   ordinaire. Le vrai contrôle reste celui de l'action.
 - **`types: [opened]` et `[created]` seulement, jamais `edited`** : rééditer un vieux
-  commentaire qui contient `@ag-resolve` relancerait un cycle complet.
+  commentaire qui contient `/use-bot` relancerait un cycle complet.
 
 À savoir aussi :
 
@@ -157,7 +158,7 @@ la porte, puisque le second étage reste exigé.
 
 Elle ne contrôle **pas** le texte. Un inconnu peut glisser une consigne dans un bloc
 `<!-- … -->`, invisible dans le rendu GitHub, qu'un mainteneur fera exécuter en
-commentant `@ag-resolve`. Ce que l'action fait contre ça : la consigne vient du texte de
+commentant `/use-bot`. Ce que l'action fait contre ça : la consigne vient du texte de
 la personne autorisée, le corps de l'issue est fourni comme donnée délimitée et
 étiquetée non fiable, les commentaires HTML sont retirés, et la consigne exacte est
 publiée dans la PR. **Aucune de ces mesures n'est une barrière.**

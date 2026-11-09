@@ -6,7 +6,7 @@
   },
   "comment": {
     "id": 2005,
-    "body": "@ag-resolve prends en charge cette demande, elle est légitime.",
+    "body": "/use-bot prends en charge cette demande, elle est légitime.",
     "user": { "login": "mainteneuse" },
     "author_association": "OWNER"
   }

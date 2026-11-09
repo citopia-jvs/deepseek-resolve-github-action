@@ -2,7 +2,7 @@
   "action": "edited",
   "changes": {
     "body": {
-      "from": "@ag-resolve corrige le test unitaire."
+      "from": "/use-bot corrige le test unitaire."
     }
   },
   "issue": {
@@ -11,7 +11,7 @@
   },
   "comment": {
     "id": 2004,
-    "body": "@ag-resolve corrige le test unitaire, et aussi le linter.",
+    "body": "/use-bot corrige le test unitaire, et aussi le linter.",
     "user": { "login": "mainteneuse" },
     "author_association": "OWNER"
   }
