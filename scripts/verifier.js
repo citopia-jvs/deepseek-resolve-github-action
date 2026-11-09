@@ -10,7 +10,10 @@
 // La commande de validation exécute du code écrit par le modèle. D'où trois
 // précautions : `.git/config` est restauré avant (claude-code-action y a mis le
 // jeton) et après (les tests ont pu le modifier), l'environnement des tests est
-// filtré, et ce step ne reçoit pas le jeton GitHub.
+// filtré, et ce step ne reçoit pas le jeton GitHub. Enfin, la configuration de
+// Claude Code est remise à l'état du commit après les tests : un test peut
+// écrire un .claude/settings.json (hooks, `env`, `apiKeyHelper`) ou un .mcp.json
+// que le passage suivant chargerait, jeton GitHub dans son environnement.
 //
 // Sort toujours en code 0 quand les tests ont pu tourner : un échec des tests
 // est un verdict, pas une panne.
@@ -20,6 +23,7 @@
 const fs = require('node:fs');
 const { spawnSync } = require('node:child_process');
 
+const { git } = require('./lib/git.js');
 const { masquerSecrets, nettoyerTexteTiers, tronquer } = require('./lib/texte.js');
 const {
   lireEnv,
@@ -59,6 +63,19 @@ function environnementTests() {
   return environnement;
 }
 
+// Chemins que Claude Code lit au démarrage d'une session. Interdits au commit
+// (`scripts/lib/chemins.js`) : les remettre à l'état du commit ne perd aucun travail.
+const CONFIGURATION_CLAUDE = ['.claude', '.mcp.json', 'CLAUDE.md', 'CLAUDE.local.md'];
+
+function restaurerConfigurationClaude() {
+  // `-x` : .claude/settings.local.json est souvent ignoré par .gitignore, et lu quand même.
+  git(['clean', '-fdqx', '--', ...CONFIGURATION_CLAUDE]);
+  const suivis = (git(['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', ...CONFIGURATION_CLAUDE]) || '')
+    .split('\0')
+    .filter(Boolean);
+  if (suivis.length > 0) git(['checkout', 'HEAD', '--', ...suivis]);
+}
+
 function retirerAnsi(texte) {
   // eslint-disable-next-line no-control-regex
   return String(texte).replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '');
@@ -88,6 +105,7 @@ function principal() {
   journaliser('::endgroup::');
 
   restaurerConfigurationGit(sauvegarde);
+  restaurerConfigurationClaude();
 
   const succes = resultat.status === 0;
   const cause = resultat.error

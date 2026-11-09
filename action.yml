@@ -126,6 +126,10 @@ runs:
     # dans son environnement, et tout code qu'il exécuterait — un test qu'il vient
     # d'écrire — pourrait le lire. Il lit et édite ; les tests sont lancés par
     # `verifier.js`, sans le jeton.
+    #
+    # Pour la même raison, `disableAllHooks` : les hooks du dépôt consommateur
+    # (.claude/settings.json) tourneraient avec ce jeton dans leur environnement,
+    # et un hook peut appeler un fichier que le modèle vient d'écrire.
     - id: claude1
       if: steps.proxy.outcome == 'success'
       # v1.0.258, épinglée par SHA : voir « Versions épinglées » dans plan/contrat.md.
@@ -145,8 +149,13 @@ runs:
               "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
               "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
             },
+            "disableAllHooks": true,
             "permissions": {
-              "deny": ["Read(./.git/**)", "Edit(./.git/**)", "Write(./.git/**)"]
+              "deny": [
+                "Read(./.git/**)", "Edit(./.git/**)", "Write(./.git/**)",
+                "Edit(./.claude/**)", "Write(./.claude/**)",
+                "Edit(./.mcp.json)", "Write(./.mcp.json)"
+              ]
             }
           }
         claude_args: >-
@@ -185,8 +194,13 @@ runs:
               "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "16384",
               "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS": "1"
             },
+            "disableAllHooks": true,
             "permissions": {
-              "deny": ["Read(./.git/**)", "Edit(./.git/**)", "Write(./.git/**)"]
+              "deny": [
+                "Read(./.git/**)", "Edit(./.git/**)", "Write(./.git/**)",
+                "Edit(./.claude/**)", "Write(./.claude/**)",
+                "Edit(./.mcp.json)", "Write(./.mcp.json)"
+              ]
             }
           }
         claude_args: >-

@@ -554,7 +554,7 @@ test('claude-code-action est épinglée par le SHA du contrat, et seule action a
   assert.deepEqual(uses, [CLAUDE_CODE_ACTION, CLAUDE_CODE_ACTION]);
 });
 
-test('les deux passages sont réglés à l’identique, sans Bash, et .git interdit', () => {
+test('les deux passages sont réglés à l’identique, sans Bash ni hooks, .git et .claude interdits', () => {
   // Le cœur de la sécurité de la voie A : claude-code-action met le jeton GitHub dans
   // l'environnement de Claude Code, donc tout code qu'il exécuterait pourrait le lire.
   // Voir « Pourquoi Claude Code n'a pas Bash » dans plan/contrat.md.
@@ -576,9 +576,15 @@ test('les deux passages sont réglés à l’identique, sans Bash, et .git inter
   assert.ok(interdits[1].split(',').includes('Bash'), 'Bash doit être dans --disallowedTools');
 
   const reglages = JSON.parse(premier.avec.get('settings').replace(/\$\{\{[^}]*\}\}/g, 'x'));
-  for (const regle of ['Read(./.git/**)', 'Edit(./.git/**)', 'Write(./.git/**)']) {
+  for (const regle of [
+    'Read(./.git/**)', 'Edit(./.git/**)', 'Write(./.git/**)',
+    'Edit(./.claude/**)', 'Write(./.claude/**)', 'Edit(./.mcp.json)', 'Write(./.mcp.json)',
+  ]) {
     assert.ok(reglages.permissions.deny.includes(regle), `settings.permissions.deny doit porter ${regle}`);
   }
+  // Mesuré : sans ce réglage, les hooks du dépôt consommateur tournent, jeton GitHub
+  // dans leur environnement. Voir « Pourquoi Claude Code n'a pas Bash ».
+  assert.equal(reglages.disableAllHooks, true, 'settings doit porter "disableAllHooks": true');
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
